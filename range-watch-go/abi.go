@@ -10,11 +10,11 @@ var (
 	bufCap uint32 = 16 << 10 // 16KB
 	bufLen uint32
 	buf    = make([]byte, int(bufCap))
-	meta   = make([]uint32, 3)
+	meta   = make([]uint32, 4)
 )
 
-//export __rangewatch
-func __rangewatch() (res uint32) {
+//export __range_watch
+func __range_watch() (res uint32) {
 	meta[0] = uint32(uintptr(unsafe.Pointer(&rev)))
 	meta[1] = uint32(uintptr(unsafe.Pointer(&bufCap)))
 	meta[2] = uint32(uintptr(unsafe.Pointer(&bufLen)))
@@ -23,20 +23,19 @@ func __rangewatch() (res uint32) {
 }
 
 func appendKey(k []byte) {
-	if bufLen+uint32(len(k))+2 > bufCap {
+	if bufLen+2+uint32(len(k)) > bufCap {
 		flush()
 		bufLen = 0
-		buf = buf[:0]
 	}
-	binary.BigEndian.PutUint16(buf[:bufLen], uint16(len(k)))
+	binary.BigEndian.PutUint16(buf[bufLen:], uint16(len(k)))
 	bufLen += 2
 	copy(buf[bufLen:], k)
 	bufLen += uint32(len(k))
 }
 
-//go:wasm-module rangewatch
+//go:wasm-module range_watch
 //export Flush
 func flush()
 
 // Fix for lint rule `unusedfunc`
-var _ = __rangewatch
+var _ = __range_watch

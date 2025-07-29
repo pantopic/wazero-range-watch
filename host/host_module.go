@@ -47,6 +47,7 @@ func New(opts ...Option) *hostModule {
 func (p *hostModule) Name() string {
 	return "pantopic/wazero-range-watch"
 }
+func (p *hostModule) Stop() {}
 
 // Register instantiates the host module, making it available to all module instances in this runtime
 func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error) {
@@ -62,7 +63,7 @@ func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		},
 	} {
 		switch fn := fn.(type) {
-		case func(ctx context.Context, watches *byteinterval.Tree[chan uint64], keys [][]byte, rev uint64) (val uint64, res []byte, err error):
+		case func(ctx context.Context, watches *byteinterval.Tree[chan uint64], keys [][]byte, rev uint64):
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, p.ctxKeyMeta)
 				fn(ctx, p.watches(ctx), keys(m, meta), rev(m, meta))
@@ -89,7 +90,7 @@ func (p *hostModule) InitContext(ctx context.Context, m api.Module) (context.Con
 		&meta.ptrBufLen,
 		&meta.ptrBuf,
 	} {
-		*v = readUint32(m, ptr+uint32(4*(i+2)))
+		*v = readUint32(m, ptr+uint32(4*i))
 	}
 	return context.WithValue(ctx, p.ctxKeyMeta, meta), meta, nil
 }

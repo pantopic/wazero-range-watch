@@ -1,8 +1,8 @@
 package rangewatch
 
-func Emit(keys [][]byte) {
+func Emit(val uint64, keys [][]byte) {
+	rev = val
 	bufLen = 0
-	buf = buf[:0]
 	for _, k := range keys {
 		appendKey(k)
 	}
