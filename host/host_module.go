@@ -11,6 +11,9 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
+// Name is the name of this host module.
+const Name = "pantopic/wazero-range-watch"
+
 var (
 	DefaultCtxKeyMeta = `wazero_range_watch_meta`
 	DefaultCtxKey     = `wazero_range_watch`
@@ -45,13 +48,13 @@ func New(opts ...Option) *hostModule {
 }
 
 func (p *hostModule) Name() string {
-	return "pantopic/wazero-range-watch"
+	return Name
 }
 func (p *hostModule) Stop() {}
 
 // Register instantiates the host module, making it available to all module instances in this runtime
 func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error) {
-	builder := r.NewHostModuleBuilder("range_watch")
+	builder := r.NewHostModuleBuilder(Name)
 	register := func(name string, fn func(ctx context.Context, m api.Module, stack []uint64)) {
 		builder = builder.NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(fn), nil, nil).Export(name)
 	}

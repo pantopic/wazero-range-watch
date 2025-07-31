@@ -33,7 +33,7 @@ func appendKey(k []byte) {
 	bufLen += uint32(len(k))
 }
 
-//go:wasm-module range_watch
+//go:wasm-module pantopic/wazero-range-watch
 //export Flush
 func flush()
 
