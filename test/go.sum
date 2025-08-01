@@ -1,2 +1,2 @@
-github.com/pantopic/wazero-range-watch/sdk-go v0.0.0-20250731235613-47ce1398dfd1 h1:jmaiD7UsG6v9uYIPdFHY69vfxgxrkNdA7lnfNwvvKmg=
-github.com/pantopic/wazero-range-watch/sdk-go v0.0.0-20250731235613-47ce1398dfd1/go.mod h1:yzzfsLJnHJmYCfTdIIj1JCjKrQi8KTZKeE5AiTtKHz0=
+github.com/pantopic/wazero-range-watch/sdk-go v0.0.3 h1:LgiLyxEM76A2aDtz32V+7H/7hGOphm6Nr4BZ+VBd5uk=
+github.com/pantopic/wazero-range-watch/sdk-go v0.0.3/go.mod h1:yzzfsLJnHJmYCfTdIIj1JCjKrQi8KTZKeE5AiTtKHz0=
