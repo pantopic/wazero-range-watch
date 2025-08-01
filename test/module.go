@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/pantopic/wazero-range-watch/range-watch-go"
+	"github.com/pantopic/wazero-range-watch/sdk-go"
 )
 
 func main() {}
