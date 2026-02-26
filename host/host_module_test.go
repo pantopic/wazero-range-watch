@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/logbn/byteinterval"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+
+	"github.com/pantopic/wazero-pool"
 )
 
 //go:embed test\.wasm
@@ -37,57 +41,77 @@ func TestModule(t *testing.T) {
 		return
 	}
 
-	var meta *meta
-	ctx, meta, err = hostModule.InitContext(ctx, mod)
+	ctx, err = hostModule.InitContext(ctx, mod)
 	if err != nil {
 		t.Fatalf(`%v`, err)
 	}
-	if v := readUint32(mod, meta.ptrBufCap); v != 16<<10 {
-		t.Fatalf("incorrect buffer cap: %#v %d", meta, v)
-	}
 
-	// create byte interval
-	watches := byteinterval.New[chan uint64]()
-	ctx = context.WithValue(ctx, hostModule.ctxKey, watches)
+	pool, err := wazeropool.New(ctx, r, testwasm, wazeropool.WithModuleConfig(cfg))
+	if err != nil {
+		panic(err)
+	}
+	ctx = wazeropool.ContextSet(ctx, pool)
+
+	ctx = ContextCopy(ctx, ctx)
 
 	call := func(cmd string, params ...uint64) {
 		if _, err := mod.ExportedFunction(cmd).Call(ctx, params...); err != nil {
 			t.Fatalf("%v\n%s", err, out.String())
 		}
 	}
-	res := make(chan uint64, 10)
-	expect := func(n int) {
-		var found int
-	loop:
-		for {
-			select {
-			case <-res:
-				found++
-			default:
-				break loop
-			}
+	read := func() (val int, id string) {
+		line, err := out.ReadString('\n')
+		if line == "" {
+			return -1, ""
 		}
-		if found != n {
-			t.Fatalf("expected %d, got %d", n, found)
+		parts := strings.Split(line[:len(line)-1], ",")
+		if val, err = strconv.Atoi(parts[0]); err != nil {
+			panic(err)
 		}
-
+		id = parts[1]
+		return
 	}
-	t.Run("base", func(t *testing.T) {
-		i1 := watches.Insert([]byte(`test-100`), []byte(`test-200`), res)
-		call("test")
-		expect(1)
-		watches.Insert([]byte(`test-200`), []byte(`test-300`), res)
-		call("test")
-		expect(2)
-		watches.Insert([]byte(`test-500`), []byte(`test-600`), res)
-		call("test")
-		expect(2)
-		watches.Insert([]byte(`test-250`), []byte(`test-350`), res)
-		call("test")
-		expect(3)
-		i1.Remove()
-		call("test")
-		expect(2)
+	expect := func(val int, ids ...string) {
+		var m = make(map[string]bool)
+		for _, id := range ids {
+			m[id] = true
+		}
+		time.Sleep(10 * time.Millisecond)
+		for {
+			if len(m) == 0 {
+				break
+			}
+			v, id := read()
+			if v != val {
+				t.Fatalf("Value %d does not match %d for %s", v, val, id)
+			}
+			_, ok := m[id]
+			if !ok {
+				t.Fatalf("ID %s incorrect for %d", id, val)
+			}
+			delete(m, id)
+		}
+	}
+	t.Run("create", func(t *testing.T) {
+		call("test_create", 100, 200)
+	})
+	t.Run("emit", func(t *testing.T) {
+		call("test_emit", 1)
+		expect(1, "100-200")
+		call("test_create", 200, 300)
+		call("test_emit", 2)
+		expect(2, "100-200", "200-300")
+		call("test_create", 500, 600)
+		call("test_emit", 3)
+		expect(3, "100-200", "200-300")
+		call("test_create", 250, 400)
+		call("test_emit", 4)
+		expect(4, "100-200", "200-300", "250-400")
+	})
+	t.Run("delete", func(t *testing.T) {
+		call("test_delete", 100, 200)
+		call("test_emit", 5)
+		expect(5, "200-300", "250-400")
 	})
 	hostModule.Stop()
 }
