@@ -5,8 +5,6 @@ import (
 	"unsafe"
 )
 
-type receiveFunc func(id []byte, val uint64)
-
 var (
 	bufCap uint32 = 16 << 10 // 16KB
 	bufLen uint32
@@ -17,7 +15,7 @@ var (
 	val    uint64
 	meta   = make([]uint32, 7)
 
-	recv receiveFunc
+	recv func(id []byte, val uint64)
 )
 
 //export __range_watch
@@ -54,6 +52,10 @@ func getVal() uint64 {
 	return val
 }
 
+func setVal(v uint64) {
+	val = v
+}
+
 func getErr() (e error) {
 	if errLen > 0 {
 		e = strErr(string(err[:errLen]))
@@ -77,12 +79,16 @@ func appendKey(k []byte) bool {
 func _flush()
 
 //go:wasm-module pantopic/wazero-range-watch
-//export __range_watch_create
-func _create()
+//export __range_watch_open
+func _open()
 
 //go:wasm-module pantopic/wazero-range-watch
-//export __range_watch_delete
-func _delete()
+//export __range_watch_start
+func _start()
+
+//go:wasm-module pantopic/wazero-range-watch
+//export __range_watch_stop
+func _stop()
 
 // Fix for lint rule `unusedfunc`
 var _ = __range_watch

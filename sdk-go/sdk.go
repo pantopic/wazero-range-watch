@@ -1,5 +1,15 @@
 package range_watch
 
+// Receive registers a callback to receive watch notices
+func Receive(fn func(id []byte, val uint64)) (err error) {
+	if recv != nil {
+		return ErrWatchReceiveAlreadyRegistered
+	}
+	recv = fn
+	return
+}
+
+// Emit broadcasts a value to watchers of a set of keys
 func Emit(v uint64, keys [][]byte) {
 	val = v
 	bufLen = 0
@@ -15,25 +25,27 @@ func Emit(v uint64, keys [][]byte) {
 	}
 }
 
-func Receive(fn receiveFunc) (err error) {
-	if recv != nil {
-		return ErrWatchReceiveAlreadyRegistered
-	}
-	recv = fn
-	return
-}
-
-func Create(id, from, to []byte) error {
+// Open starts receiving values into a buffer
+func Open(id, from, to []byte) error {
 	bufLen = 0
 	appendKey(id)
 	appendKey(from)
 	appendKey(to)
-	_create()
+	_open()
 	return getErr()
 }
 
-func Delete(id []byte) error {
+// Start begins the processing of values in the buffer after supplied minimum
+func Start(id []byte, after uint64) error {
 	setData(id)
-	_delete()
+	setVal(after)
+	_start()
+	return getErr()
+}
+
+// Stop closes the range watch
+func Stop(id []byte) error {
+	setData(id)
+	_stop()
 	return getErr()
 }

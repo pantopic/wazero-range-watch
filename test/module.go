@@ -27,18 +27,43 @@ func test_emit(val uint32) {
 
 //export test_create
 func test_create(from, to uint32) {
-	range_watch.Create(id(from, to),
+	id := watchID(from, to)
+	range_watch.Open(id,
+		[]byte(`test-`+strconv.Itoa(int(from))),
+		[]byte(`test-`+strconv.Itoa(int(to))),
+	)
+	range_watch.Start(id, 0)
+}
+
+//export test_open
+func test_open(from, to uint32) {
+	id := watchID(from, to)
+	range_watch.Open(id,
 		[]byte(`test-`+strconv.Itoa(int(from))),
 		[]byte(`test-`+strconv.Itoa(int(to))),
 	)
 }
 
-//export test_delete
-func test_delete(from, to uint32) {
-	range_watch.Delete(id(from, to))
+//export test_start
+func test_start(from, to, after uint32) {
+	id := watchID(from, to)
+	range_watch.Start(id, uint64(after))
 }
 
-func id(from, to uint32) []byte {
+//export test_emit_2
+func test_emit_2(val uint32) {
+	range_watch.Emit(uint64(val), [][]byte{
+		[]byte(`test-` + strconv.Itoa(int(val))),
+	})
+}
+
+//export test_stop
+func test_stop(from, to uint32) {
+	id := watchID(from, to)
+	range_watch.Stop(id)
+}
+
+func watchID(from, to uint32) []byte {
 	// ie. "100-200"
 	return []byte(strconv.Itoa(int(from)) + `-` + strconv.Itoa(int(to)))
 }
@@ -46,4 +71,7 @@ func id(from, to uint32) []byte {
 // Fix for lint rule `unusedfunc`
 var _ = test_emit
 var _ = test_create
-var _ = test_delete
+var _ = test_open
+var _ = test_start
+var _ = test_stop
+var _ = test_emit_2

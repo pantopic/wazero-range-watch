@@ -109,9 +109,21 @@ func TestModule(t *testing.T) {
 		expect(4, "100-200", "200-300", "250-400")
 	})
 	t.Run("delete", func(t *testing.T) {
-		call("test_delete", 100, 200)
+		call("test_stop", 100, 200)
 		call("test_emit", 5)
 		expect(5, "200-300", "250-400")
+	})
+	t.Run("open_start", func(t *testing.T) {
+		call("test_open", 1000, 2000)
+		call("test_emit_2", 1500)
+		call("test_emit_2", 1600)
+		call("test_emit_2", 1700)
+		call("test_start", 1000, 2000, 1600)
+		call("test_emit_2", 1800)
+		call("test_emit_2", 1900)
+		expect(1700, "1000-2000")
+		expect(1800, "1000-2000")
+		expect(1900, "1000-2000")
 	})
 	hostModule.Stop()
 }

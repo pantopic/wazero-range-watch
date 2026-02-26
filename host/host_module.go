@@ -72,15 +72,19 @@ func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				w <- val
 			}
 		},
-		"__range_watch_create": func(ctx context.Context, list *watchList, id, from, to []byte) {
-			watch, err := list.new(ctx, id, from, to)
+		"__range_watch_open": func(ctx context.Context, list *watchList, id, from, to []byte) {
+			watch, err := list.open(ctx, id, from, to)
 			if err != nil {
 				return
 			}
 			watch.Go(func() {
+				watch.ready.Wait()
 				for {
 					select {
 					case val := <-watch.out:
+						if val <= watch.after {
+							continue
+						}
 						meta := get[*meta](ctx, ctxKeyMeta)
 						wazeropool.Context(ctx).Run(func(mod api.Module) {
 							setData(mod, meta, id)
@@ -102,7 +106,15 @@ func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				}
 			})
 		},
-		"__range_watch_delete": func(ctx context.Context, list *watchList, id []byte) (err error) {
+		"__range_watch_start": func(ctx context.Context, list *watchList, id []byte, after uint64) (err error) {
+			watch, err := list.find(id)
+			if err == nil {
+				watch.after = after
+				watch.ready.Done()
+			}
+			return
+		},
+		"__range_watch_stop": func(ctx context.Context, list *watchList, id []byte) (err error) {
 			watch, err := list.find(id)
 			if err == nil {
 				watch.close()
@@ -132,6 +144,12 @@ func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
 				err := fn(ctx, getWatchList(ctx), getData(m, meta))
+				setErr(m, meta, err)
+			})
+		case func(ctx context.Context, watches *watchList, id []byte, val uint64) error:
+			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
+				meta := get[*meta](ctx, ctxKeyMeta)
+				err := fn(ctx, getWatchList(ctx), getData(m, meta), getVal(m, meta))
 				setErr(m, meta, err)
 			})
 		default:

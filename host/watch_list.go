@@ -9,7 +9,7 @@ import (
 )
 
 type watchList struct {
-	sync.Mutex
+	sync.RWMutex
 
 	items map[string]*watch
 	tree  *byteinterval.Tree[chan uint64]
@@ -39,34 +39,40 @@ func (list *watchList) release() {
 		return
 	}
 	list.Lock()
-	defer list.Unlock()
 	for _, w := range list.items {
 		w._close()
 	}
-	defer watchListPool.Put(list)
+	list.Unlock()
+	watchListPool.Put(list)
 }
 
-func (list *watchList) new(ctx context.Context, id, from, to []byte) (w *watch, err error) {
+// Multiple watches per connection
+func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
+	k := base64.URLEncoding.EncodeToString(id)
 	list.Lock()
 	defer list.Unlock()
-	w, ok := list.items[base64.URLEncoding.EncodeToString(id)]
+	w, ok := list.items[k]
 	if ok {
 		return w, ErrWatchExists
 	}
-	out := make(chan uint64)
+	out := make(chan uint64, 1e3)
 	w = &watch{
-		id:   id,
+		id:   k,
 		out:  out,
 		list: list,
 		intv: list.tree.Insert(from, to, out),
 	}
+	w.ready.Add(1)
 	w.ctx, w.cancel = context.WithCancel(ctx)
-	list.items[base64.URLEncoding.EncodeToString(id)] = w
+	list.items[k] = w
 	return
 }
 
 func (list *watchList) find(id []byte) (w *watch, err error) {
-	w, ok := list.items[base64.URLEncoding.EncodeToString(id)]
+	k := base64.URLEncoding.EncodeToString(id)
+	list.RLock()
+	defer list.RUnlock()
+	w, ok := list.items[k]
 	if !ok {
 		err = ErrWatchNotFound
 	}
@@ -83,7 +89,7 @@ func (w *watch) _close() {
 	w.intv.Remove()
 	w.cancel()
 	w.Wait()
-	delete(w.list.items, base64.URLEncoding.EncodeToString(w.id))
+	delete(w.list.items, w.id)
 }
 
 type watch struct {
@@ -91,8 +97,10 @@ type watch struct {
 
 	cancel context.CancelFunc
 	ctx    context.Context
-	id     []byte
+	id     string
 	intv   *byteinterval.Interval[chan uint64]
 	list   *watchList
 	out    chan uint64
+	ready  sync.WaitGroup
+	after  uint64
 }
