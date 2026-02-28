@@ -72,6 +72,10 @@ func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				w <- val
 			}
 		},
+		"__range_watch_reserve": func(ctx context.Context, list *watchList, id []byte) (err error) {
+			_, err = list.reserve(ctx, id)
+			return
+		},
 		"__range_watch_open": func(ctx context.Context, list *watchList, id, from, to []byte) {
 			watch, err := list.open(ctx, id, from, to)
 			if err != nil {
@@ -116,9 +120,10 @@ func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		},
 		"__range_watch_stop": func(ctx context.Context, list *watchList, id []byte) (err error) {
 			watch, err := list.find(id)
-			if err == nil {
-				watch.close()
+			if err != nil {
+				return
 			}
+			watch.close()
 			return
 		},
 	} {

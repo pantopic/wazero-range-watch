@@ -25,6 +25,14 @@ func Emit(v uint64, keys [][]byte) {
 	}
 }
 
+// Reserve locks the range watch id for future opening
+func Reserve(id []byte) error {
+	bufLen = 0
+	appendKey(id)
+	_reserve()
+	return getErr()
+}
+
 // Open starts receiving values into a buffer
 func Open(id, from, to []byte) error {
 	bufLen = 0

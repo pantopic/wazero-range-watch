@@ -76,6 +76,8 @@ func TestModule(t *testing.T) {
 		for _, id := range ids {
 			m[id] = true
 		}
+		// time sleep required because we're relying on stdout which may return EOF rather than blocking
+		// replace stdout with pipe to solve race condition, removing time sleep dependency
 		time.Sleep(10 * time.Millisecond)
 		for {
 			if len(m) == 0 {
@@ -113,14 +115,19 @@ func TestModule(t *testing.T) {
 		call("test_emit", 5)
 		expect(5, "200-300", "250-400")
 	})
+	t.Run("reserve", func(t *testing.T) {
+		call("test_reserve", 1000, 2000)
+	})
 	t.Run("open_start", func(t *testing.T) {
 		call("test_open", 1000, 2000)
+		call("test_emit_2", 1400)
 		call("test_emit_2", 1500)
 		call("test_emit_2", 1600)
 		call("test_emit_2", 1700)
-		call("test_start", 1000, 2000, 1600)
+		call("test_start", 1000, 2000, 1500)
 		call("test_emit_2", 1800)
 		call("test_emit_2", 1900)
+		expect(1600, "1000-2000")
 		expect(1700, "1000-2000")
 		expect(1800, "1000-2000")
 		expect(1900, "1000-2000")

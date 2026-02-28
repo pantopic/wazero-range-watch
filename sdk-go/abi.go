@@ -79,6 +79,10 @@ func appendKey(k []byte) bool {
 func _flush()
 
 //go:wasm-module pantopic/wazero-range-watch
+//export __range_watch_reserve
+func _reserve()
+
+//go:wasm-module pantopic/wazero-range-watch
 //export __range_watch_open
 func _open()
 

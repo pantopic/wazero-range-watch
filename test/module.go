@@ -35,6 +35,11 @@ func test_create(from, to uint32) {
 	range_watch.Start(id, 0)
 }
 
+//export test_reserve
+func test_reserve(from, to uint32) {
+	range_watch.Reserve(watchID(from, to))
+}
+
 //export test_open
 func test_open(from, to uint32) {
 	id := watchID(from, to)
@@ -70,6 +75,7 @@ func watchID(from, to uint32) []byte {
 
 // Fix for lint rule `unusedfunc`
 var _ = test_emit
+var _ = test_reserve
 var _ = test_create
 var _ = test_open
 var _ = test_start

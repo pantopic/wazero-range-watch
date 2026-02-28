@@ -24,7 +24,6 @@ var watchListPool = sync.Pool{
 	},
 }
 
-// One watch list per connection
 func newWatchList(ctx context.Context) *watchList {
 	w := watchListPool.Get().(*watchList)
 	go func() {
@@ -46,8 +45,7 @@ func (list *watchList) release() {
 	watchListPool.Put(list)
 }
 
-// Multiple watches per connection
-func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
+func (list *watchList) reserve(ctx context.Context, id []byte) (w *watch, err error) {
 	k := base64.URLEncoding.EncodeToString(id)
 	list.Lock()
 	defer list.Unlock()
@@ -60,11 +58,26 @@ func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch,
 		id:   k,
 		out:  out,
 		list: list,
-		intv: list.tree.Insert(from, to, out),
 	}
 	w.ready.Add(1)
 	w.ctx, w.cancel = context.WithCancel(ctx)
 	list.items[k] = w
+	return
+}
+
+func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
+	w, err = list.find(id)
+	if err == ErrWatchNotFound {
+		w, err = list.reserve(ctx, id)
+	}
+	if err != nil {
+		return
+	}
+	if w.intv != nil {
+		err = ErrWatchAlreadyOpen
+		return
+	}
+	w.intv = list.tree.Insert(from, to, w.out)
 	return
 }
 
