@@ -55,13 +55,13 @@ func New(opts ...Option) *hostModule {
 	return p
 }
 
-func (p *hostModule) Name() string {
+func (h *hostModule) Name() string {
 	return Name
 }
-func (p *hostModule) Stop() {}
+func (h *hostModule) Stop() {}
 
 // Register instantiates the host module, making it available to all module instances in this runtime
-func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error) {
+func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error) {
 	builder := r.NewHostModuleBuilder(Name)
 	register := func(name string, fn func(ctx context.Context, m api.Module, stack []uint64)) {
 		builder = builder.NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(fn), nil, nil).Export(name)
@@ -161,12 +161,12 @@ func (p *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			log.Panicf("Method signature implementation missing: %#v", fn)
 		}
 	}
-	p.module, err = builder.Instantiate(ctx)
+	h.module, err = builder.Instantiate(ctx)
 	return
 }
 
 // InitContext retrieves the meta page from the wasm module
-func (p *hostModule) InitContext(ctx context.Context, m api.Module) (context.Context, error) {
+func (h *hostModule) InitContext(ctx context.Context, m api.Module) (context.Context, error) {
 	stack, err := m.ExportedFunction(`__range_watch`).Call(ctx)
 	if err != nil {
 		return ctx, err
