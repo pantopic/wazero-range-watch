@@ -24,7 +24,11 @@ var (
 
 func ContextCopy(dst, src context.Context) context.Context {
 	dst = context.WithValue(dst, ctxKeyMeta, get[*meta](src, ctxKeyMeta))
-	dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
+	if v := src.Value(ctxKeyWatchList); v != nil {
+		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
+	} else {
+		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
+	}
 	return dst
 }
 
@@ -76,7 +80,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			_, err = list.reserve(ctx, id)
 			return
 		},
-		"__range_watch_open": func(ctx context.Context, list *watchList, id, from, to []byte) {
+		"__range_watch_open": func(ctx context.Context, list *watchList, id, from, to []byte) (err error) {
 			watch, err := list.open(ctx, id, from, to)
 			if err != nil {
 				return
@@ -86,11 +90,8 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				for {
 					select {
 					case val := <-watch.out:
-						if val <= watch.after {
-							continue
-						}
 						meta := get[*meta](ctx, ctxKeyMeta)
-						wazeropool.Context(ctx).Run(func(mod api.Module) {
+						wazeropool.FromContext(ctx).Run(func(mod api.Module) {
 							setData(mod, meta, id)
 							setVal(mod, meta, val)
 							setErr(mod, meta, nil)
@@ -109,6 +110,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 					}
 				}
 			})
+			return
 		},
 		"__range_watch_start": func(ctx context.Context, list *watchList, id []byte, after uint64) (err error) {
 			watch, err := list.find(id)
@@ -133,7 +135,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				meta := get[*meta](ctx, ctxKeyMeta)
 				fn(ctx, getWatchList(ctx), keys(m, meta), val(m, meta))
 			})
-		case func(ctx context.Context, watches *watchList, id, from, to []byte):
+		case func(ctx context.Context, watches *watchList, id, from, to []byte) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
 				k := keys(m, meta)
@@ -144,6 +146,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 					append([]byte{}, k[0]...),
 					append([]byte{}, k[1]...),
 					append([]byte{}, k[2]...))
+				setErr(m, meta, err)
 			})
 		case func(ctx context.Context, watches *watchList, id []byte) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
@@ -253,7 +256,7 @@ func readUint32(m api.Module, ptr uint32) (val uint32) {
 }
 
 func keys(m api.Module, meta *meta) (keys [][]byte) {
-	buf := read(m, meta.ptrBuf, meta.ptrBufLen, meta.ptrBufCap)
+	buf := getData(m, meta)
 	for len(buf) > 0 {
 		keyLen := binary.BigEndian.Uint16(buf)
 		buf = buf[2:]
@@ -263,8 +266,8 @@ func keys(m api.Module, meta *meta) (keys [][]byte) {
 	return
 }
 
-func read(m api.Module, ptrData, ptrLen, ptrMax uint32) (buf []byte) {
-	buf, ok := m.Memory().Read(ptrData, readUint32(m, ptrMax))
+func read(m api.Module, ptrData, ptrLen, ptrCap uint32) (buf []byte) {
+	buf, ok := m.Memory().Read(ptrData, readUint32(m, ptrCap))
 	if !ok {
 		log.Panicf("Memory.Read(%d, %d) out of range", ptrData, ptrLen)
 	}

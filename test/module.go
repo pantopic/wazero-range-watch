@@ -32,7 +32,7 @@ func test_create(from, to uint32) {
 		[]byte(`test-`+strconv.Itoa(int(from))),
 		[]byte(`test-`+strconv.Itoa(int(to))),
 	)
-	range_watch.Start(id, 0)
+	range_watch.Start(id)
 }
 
 //export test_reserve
@@ -50,9 +50,9 @@ func test_open(from, to uint32) {
 }
 
 //export test_start
-func test_start(from, to, after uint32) {
+func test_start(from, to uint32) {
 	id := watchID(from, to)
-	range_watch.Start(id, uint64(after))
+	range_watch.Start(id)
 }
 
 //export test_emit_2

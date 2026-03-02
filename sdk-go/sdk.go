@@ -27,8 +27,7 @@ func Emit(v uint64, keys [][]byte) {
 
 // Reserve locks the range watch id for future opening
 func Reserve(id []byte) error {
-	bufLen = 0
-	appendKey(id)
+	setData(id)
 	_reserve()
 	return getErr()
 }
@@ -44,9 +43,8 @@ func Open(id, from, to []byte) error {
 }
 
 // Start begins the processing of values in the buffer after supplied minimum
-func Start(id []byte, after uint64) error {
+func Start(id []byte) error {
 	setData(id)
-	setVal(after)
 	_start()
 	return getErr()
 }

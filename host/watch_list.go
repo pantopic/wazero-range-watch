@@ -55,11 +55,11 @@ func (list *watchList) reserve(ctx context.Context, id []byte) (w *watch, err er
 	}
 	out := make(chan uint64, 1e3)
 	w = &watch{
-		id:   k,
-		out:  out,
-		list: list,
+		id:    k,
+		out:   out,
+		list:  list,
+		ready: &sync.WaitGroup{},
 	}
-	w.ready.Add(1)
 	w.ctx, w.cancel = context.WithCancel(ctx)
 	list.items[k] = w
 	return
@@ -78,6 +78,7 @@ func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch,
 		return
 	}
 	w.intv = list.tree.Insert(from, to, w.out)
+	w.ready.Add(1)
 	return
 }
 
@@ -114,6 +115,6 @@ type watch struct {
 	intv   *byteinterval.Interval[chan uint64]
 	list   *watchList
 	out    chan uint64
-	ready  sync.WaitGroup
+	ready  *sync.WaitGroup
 	after  uint64
 }
