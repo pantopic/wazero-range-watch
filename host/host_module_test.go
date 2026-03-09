@@ -52,7 +52,7 @@ func TestModule(t *testing.T) {
 	}
 	ctx = wazeropool.ContextSet(ctx, pool)
 
-	ctx = ContextCopy(ctx, ctx)
+	ctx = hostModule.ContextCopy(ctx, ctx)
 
 	call := func(cmd string, params ...uint64) {
 		if _, err := mod.ExportedFunction(cmd).Call(ctx, params...); err != nil {

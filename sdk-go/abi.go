@@ -6,14 +6,14 @@ import (
 )
 
 var (
-	bufCap uint32 = 16 << 10 // 16KB
-	bufLen uint32
-	buf           = make([]byte, int(bufCap))
-	errCap uint32 = 1 << 10 // 1KB
-	errLen uint32
-	err    = make([]byte, int(errCap))
-	val    uint64
-	meta   = make([]uint32, 7)
+	_bufCap uint32 = 16 << 10 // 16KB
+	_bufLen uint32
+	_buf           = make([]byte, int(_bufCap))
+	_errCap uint32 = 1 << 10 // 1KB
+	_errLen uint32
+	_err    = make([]byte, int(_errCap))
+	_val    uint64
+	meta    = make([]uint32, 7)
 
 	recv func(id []byte, val uint64)
 )
@@ -21,13 +21,13 @@ var (
 //export __range_watch
 func __range_watch() (res uint32) {
 	for i, p := range []unsafe.Pointer{
-		unsafe.Pointer(&buf[0]),
-		unsafe.Pointer(&bufCap),
-		unsafe.Pointer(&bufLen),
-		unsafe.Pointer(&err[0]),
-		unsafe.Pointer(&errCap),
-		unsafe.Pointer(&errLen),
-		unsafe.Pointer(&val),
+		unsafe.Pointer(&_buf[0]),
+		unsafe.Pointer(&_bufCap),
+		unsafe.Pointer(&_bufLen),
+		unsafe.Pointer(&_err[0]),
+		unsafe.Pointer(&_errCap),
+		unsafe.Pointer(&_errLen),
+		unsafe.Pointer(&_val),
 	} {
 		meta[i] = uint32(uintptr(p))
 	}
@@ -36,41 +36,29 @@ func __range_watch() (res uint32) {
 
 //export __range_watch_recv
 func __range_watch_recv() {
-	recv(getData(), getVal())
-}
-
-func getData() []byte {
-	return buf[:bufLen]
+	recv(_buf[:_bufLen], _val)
 }
 
 func setData(b []byte) {
-	bufLen = uint32(len(b))
-	copy(buf[:len(b)], b)
-}
-
-func getVal() uint64 {
-	return val
-}
-
-func setVal(v uint64) {
-	val = v
+	_bufLen = uint32(len(b))
+	copy(_buf[:len(b)], b)
 }
 
 func getErr() (e error) {
-	if errLen > 0 {
-		e = strErr(string(err[:errLen]))
+	if _errLen > 0 {
+		e = strErr(string(_err[:_errLen]))
 	}
 	return
 }
 
 func appendKey(k []byte) bool {
-	if bufLen+2+uint32(len(k)) > bufCap {
+	if _bufLen+2+uint32(len(k)) > _bufCap {
 		return false
 	}
-	binary.BigEndian.PutUint16(buf[bufLen:], uint16(len(k)))
-	bufLen += 2
-	copy(buf[bufLen:], k)
-	bufLen += uint32(len(k))
+	binary.BigEndian.PutUint16(_buf[_bufLen:], uint16(len(k)))
+	_bufLen += 2
+	copy(_buf[_bufLen:], k)
+	_bufLen += uint32(len(k))
 	return true
 }
 

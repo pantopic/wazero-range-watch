@@ -22,16 +22,6 @@ var (
 	ctxKeyWatchList = Name + `/watch_list`
 )
 
-func ContextCopy(dst, src context.Context) context.Context {
-	dst = context.WithValue(dst, ctxKeyMeta, get[*meta](src, ctxKeyMeta))
-	if v := src.Value(ctxKeyWatchList); v != nil {
-		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
-	} else {
-		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
-	}
-	return dst
-}
-
 type meta struct {
 	ptrBuf    uint32
 	ptrBufCap uint32
@@ -72,7 +62,11 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 	}
 	for name, fn := range map[string]any{
 		"__range_watch_flush": func(ctx context.Context, list *watchList, keys [][]byte, val uint64) {
+			for _, k := range keys {
+				log.Printf(`__range_watch_flush: %d: %s`, val, string(k))
+			}
 			for _, w := range list.tree.FindAny(keys...) {
+				log.Printf(`__range_watch_flush: Found: %d`, val)
 				w <- val
 			}
 		},
@@ -85,8 +79,10 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			if err != nil {
 				return
 			}
+			log.Printf(`__range_watch_open: %d: %s - %s`, binary.BigEndian.Uint64(id), string(from), string(to))
 			watch.Go(func() {
 				watch.ready.Wait()
+				log.Printf(`__range_watch_open: Watch %d ready`, binary.BigEndian.Uint64(id))
 				for {
 					select {
 					case val := <-watch.out:
@@ -106,17 +102,19 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 							}
 						})
 					case <-watch.ctx.Done():
+						log.Printf(`__range_watch_open: Watch %d done`, binary.BigEndian.Uint64(id))
 						return
 					}
 				}
 			})
 			return
 		},
-		"__range_watch_start": func(ctx context.Context, list *watchList, id []byte, after uint64) (err error) {
+		"__range_watch_start": func(ctx context.Context, list *watchList, id []byte) (err error) {
 			watch, err := list.find(id)
 			if err == nil {
-				watch.after = after
 				watch.ready.Done()
+			} else {
+				log.Printf(`__range_watch_start: Watch not found: %d`, binary.BigEndian.Uint64(id))
 			}
 			return
 		},
@@ -154,12 +152,6 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				err := fn(ctx, getWatchList(ctx), getData(m, meta))
 				setErr(m, meta, err)
 			})
-		case func(ctx context.Context, watches *watchList, id []byte, val uint64) error:
-			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
-				meta := get[*meta](ctx, ctxKeyMeta)
-				err := fn(ctx, getWatchList(ctx), getData(m, meta), getVal(m, meta))
-				setErr(m, meta, err)
-			})
 		default:
 			log.Panicf("Method signature implementation missing: %#v", fn)
 		}
@@ -188,6 +180,16 @@ func (h *hostModule) InitContext(ctx context.Context, m api.Module) (context.Con
 		*v = readUint32(m, ptr+uint32(4*i))
 	}
 	return context.WithValue(ctx, ctxKeyMeta, meta), nil
+}
+
+func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
+	dst = context.WithValue(dst, ctxKeyMeta, get[*meta](src, ctxKeyMeta))
+	if v := src.Value(ctxKeyWatchList); v != nil {
+		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
+	} else if v := dst.Value(ctxKeyWatchList); v == nil {
+		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
+	}
+	return dst
 }
 
 func getWatchList(ctx context.Context) *watchList {

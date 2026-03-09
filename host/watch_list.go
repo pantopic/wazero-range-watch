@@ -2,7 +2,8 @@ package wazero_range_watch
 
 import (
 	"context"
-	"encoding/base64"
+	"encoding/hex"
+	"log"
 	"sync"
 
 	"github.com/logbn/byteinterval"
@@ -25,6 +26,7 @@ var watchListPool = sync.Pool{
 }
 
 func newWatchList(ctx context.Context) *watchList {
+	log.Println(`watchList.new`)
 	w := watchListPool.Get().(*watchList)
 	go func() {
 		<-ctx.Done()
@@ -34,6 +36,7 @@ func newWatchList(ctx context.Context) *watchList {
 }
 
 func (list *watchList) release() {
+	log.Println(`watchList.release`)
 	if list == nil {
 		return
 	}
@@ -46,7 +49,7 @@ func (list *watchList) release() {
 }
 
 func (list *watchList) reserve(ctx context.Context, id []byte) (w *watch, err error) {
-	k := base64.URLEncoding.EncodeToString(id)
+	k := hex.EncodeToString(id)
 	list.Lock()
 	defer list.Unlock()
 	w, ok := list.items[k]
@@ -68,10 +71,7 @@ func (list *watchList) reserve(ctx context.Context, id []byte) (w *watch, err er
 func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
 	w, err = list.find(id)
 	if err == ErrWatchNotFound {
-		w, err = list.reserve(ctx, id)
-	}
-	if err != nil {
-		return
+		w, _ = list.reserve(ctx, id)
 	}
 	if w.intv != nil {
 		err = ErrWatchAlreadyOpen
@@ -83,7 +83,7 @@ func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch,
 }
 
 func (list *watchList) find(id []byte) (w *watch, err error) {
-	k := base64.URLEncoding.EncodeToString(id)
+	k := hex.EncodeToString(id)
 	list.RLock()
 	defer list.RUnlock()
 	w, ok := list.items[k]

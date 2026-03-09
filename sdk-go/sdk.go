@@ -11,16 +11,16 @@ func Receive(fn func(id []byte, val uint64)) (err error) {
 
 // Emit broadcasts a value to watchers of a set of keys
 func Emit(v uint64, keys [][]byte) {
-	val = v
-	bufLen = 0
+	_val = v
+	_bufLen = 0
 	for _, k := range keys {
 		if !appendKey(k) {
 			_flush()
-			bufLen = 0
+			_bufLen = 0
 			appendKey(k)
 		}
 	}
-	if bufLen > 0 {
+	if _bufLen > 0 {
 		_flush()
 	}
 }
@@ -34,7 +34,7 @@ func Reserve(id []byte) error {
 
 // Open starts receiving values into a buffer
 func Open(id, from, to []byte) error {
-	bufLen = 0
+	_bufLen = 0
 	appendKey(id)
 	appendKey(from)
 	appendKey(to)
@@ -42,7 +42,7 @@ func Open(id, from, to []byte) error {
 	return getErr()
 }
 
-// Start begins the processing of values in the buffer after supplied minimum
+// Start begins the processing of values in the buffer
 func Start(id []byte) error {
 	setData(id)
 	_start()
