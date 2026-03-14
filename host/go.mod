@@ -1,6 +1,6 @@
 module github.com/pantopic/wazero-range-watch/host
 
-go 1.25.7
+go 1.25.6
 
 require (
 	github.com/logbn/byteinterval v0.0.1

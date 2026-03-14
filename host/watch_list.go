@@ -3,7 +3,6 @@ package wazero_range_watch
 import (
 	"context"
 	"encoding/hex"
-	"log"
 	"sync"
 
 	"github.com/logbn/byteinterval"
@@ -26,7 +25,6 @@ var watchListPool = sync.Pool{
 }
 
 func newWatchList(ctx context.Context) *watchList {
-	log.Println(`watchList.new`)
 	w := watchListPool.Get().(*watchList)
 	go func() {
 		<-ctx.Done()
@@ -36,7 +34,6 @@ func newWatchList(ctx context.Context) *watchList {
 }
 
 func (list *watchList) release() {
-	log.Println(`watchList.release`)
 	if list == nil {
 		return
 	}

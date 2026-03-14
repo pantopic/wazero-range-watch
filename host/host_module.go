@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -19,6 +20,7 @@ const Name = "pantopic/wazero-range-watch"
 
 var (
 	ctxKeyMeta      = Name + `/meta`
+	ctxKeyGroup     = Name + `/group`
 	ctxKeyWatchList = Name + `/watch_list`
 )
 
@@ -36,17 +38,20 @@ type hostModule struct {
 	sync.RWMutex
 	sync.WaitGroup
 
-	module api.Module
+	module  api.Module
+	groupID *atomic.Uint64
 }
 
 type Option func(*hostModule)
 
-func New(opts ...Option) *hostModule {
-	p := &hostModule{}
-	for _, opt := range opts {
-		opt(p)
+func New(opts ...Option) (h *hostModule) {
+	h = &hostModule{
+		groupID: &atomic.Uint64{},
 	}
-	return p
+	for _, opt := range opts {
+		opt(h)
+	}
+	return
 }
 
 func (h *hostModule) Name() string {
@@ -62,11 +67,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 	}
 	for name, fn := range map[string]any{
 		"__range_watch_flush": func(ctx context.Context, list *watchList, keys [][]byte, val uint64) {
-			for _, k := range keys {
-				log.Printf(`__range_watch_flush: %d: %s`, val, string(k))
-			}
 			for _, w := range list.tree.FindAny(keys...) {
-				log.Printf(`__range_watch_flush: Found: %d`, val)
 				w <- val
 			}
 		},
@@ -79,16 +80,22 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			if err != nil {
 				return
 			}
-			log.Printf(`__range_watch_open: %d: %s - %s`, binary.BigEndian.Uint64(id), string(from), string(to))
 			watch.Go(func() {
 				watch.ready.Wait()
-				log.Printf(`__range_watch_open: Watch %d ready`, binary.BigEndian.Uint64(id))
 				for {
 					select {
 					case val := <-watch.out:
+					drain:
+						for {
+							select {
+							case val = <-watch.out:
+							default:
+								break drain
+							}
+						}
 						meta := get[*meta](ctx, ctxKeyMeta)
 						wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-							setData(mod, meta, id)
+							setData(mod, meta, id[8:])
 							setVal(mod, meta, val)
 							setErr(mod, meta, nil)
 							if _, err = mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
@@ -102,7 +109,6 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 							}
 						})
 					case <-watch.ctx.Done():
-						log.Printf(`__range_watch_open: Watch %d done`, binary.BigEndian.Uint64(id))
 						return
 					}
 				}
@@ -141,7 +147,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 					panic(`expected 3 args`)
 				}
 				fn(ctx, getWatchList(ctx),
-					append([]byte{}, k[0]...),
+					prependGroupID(ctx, k[0]),
 					append([]byte{}, k[1]...),
 					append([]byte{}, k[2]...))
 				setErr(m, meta, err)
@@ -149,7 +155,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		case func(ctx context.Context, watches *watchList, id []byte) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
-				err := fn(ctx, getWatchList(ctx), getData(m, meta))
+				err := fn(ctx, getWatchList(ctx), prependGroupID(ctx, getData(m, meta)))
 				setErr(m, meta, err)
 			})
 		default:
@@ -184,16 +190,22 @@ func (h *hostModule) InitContext(ctx context.Context, m api.Module) (context.Con
 
 func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
 	dst = context.WithValue(dst, ctxKeyMeta, get[*meta](src, ctxKeyMeta))
+	// dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
 	if v := src.Value(ctxKeyWatchList); v != nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
 	} else if v := dst.Value(ctxKeyWatchList); v == nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
 	}
+	dst = context.WithValue(dst, ctxKeyGroup, h.groupID.Add(1))
 	return dst
 }
 
 func getWatchList(ctx context.Context) *watchList {
 	return get[*watchList](ctx, ctxKeyWatchList)
+}
+
+func prependGroupID(ctx context.Context, b []byte) []byte {
+	return append(binary.BigEndian.AppendUint64([]byte{}, get[uint64](ctx, ctxKeyGroup)), b...)
 }
 
 func dataBuf(m api.Module, meta *meta) []byte {
