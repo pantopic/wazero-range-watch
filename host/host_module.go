@@ -88,7 +88,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 					drain:
 						for {
 							select {
-							case val = <-watch.out:
+							case _ = <-watch.out:
 							default:
 								break drain
 							}
