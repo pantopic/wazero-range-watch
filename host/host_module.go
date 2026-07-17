@@ -189,7 +189,11 @@ func (h *hostModule) InitContext(ctx context.Context, m api.Module) (context.Con
 }
 
 func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
-	dst = context.WithValue(dst, ctxKeyMeta, get[*meta](src, ctxKeyMeta))
+	v := src.Value(ctxKeyMeta)
+	if v == nil {
+		return dst
+	}
+	dst = context.WithValue(dst, ctxKeyMeta, v.(*meta))
 	// dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
 	if v := src.Value(ctxKeyWatchList); v != nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
