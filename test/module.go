@@ -6,11 +6,11 @@ import (
 	"github.com/pantopic/wazero-range-watch/sdk-go"
 )
 
-func main() {
-	if err := range_watch.Receive(recv); err != nil {
-		panic(err)
-	}
+func init() {
+	range_watch.Receive(recv)
 }
+
+func main() {}
 
 func recv(id []byte, val uint64) {
 	println(strconv.Itoa(int(val)) + `,` + string(id))

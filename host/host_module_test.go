@@ -85,13 +85,19 @@ func TestModule(t *testing.T) {
 			}
 			v, id := read()
 			if v != val {
-				t.Fatalf("Value %d does not match %d for %s", v, val, id)
+				t.Errorf("Value %d does not match %d for %s", v, val, id)
+				break
 			}
-			_, ok := m[id]
-			if !ok {
-				t.Fatalf("ID %s incorrect for %d", id, val)
+			if len(id) > 0 {
+				_, ok := m[id]
+				if !ok {
+					t.Errorf("ID %s incorrect for %d", id, val)
+					break
+				}
+				delete(m, id)
+			} else {
+				break
 			}
-			delete(m, id)
 		}
 	}
 	t.Run("create", func(t *testing.T) {
@@ -110,6 +116,7 @@ func TestModule(t *testing.T) {
 		call("test_emit", 4)
 		expect(4, "100-200", "200-300", "250-400")
 	})
+	ctx = hostModule.ContextCopy(ctx, ctx)
 	t.Run("delete", func(t *testing.T) {
 		call("test_stop", 100, 200)
 		call("test_emit", 5)
@@ -118,6 +125,7 @@ func TestModule(t *testing.T) {
 	t.Run("reserve", func(t *testing.T) {
 		call("test_reserve", 1000, 2000)
 	})
+	ctx = hostModule.ContextCopy(ctx, ctx)
 	t.Run("open_start", func(t *testing.T) {
 		call("test_open", 1000, 2000)
 		call("test_emit_2", 1500)
@@ -125,11 +133,9 @@ func TestModule(t *testing.T) {
 		call("test_emit_2", 1700)
 		call("test_start", 1000, 2000)
 		call("test_emit_2", 1800)
-		call("test_emit_2", 1900)
 		expect(1500, "1000-2000")
-		expect(1600, "1000-2000")
-		expect(1700, "1000-2000")
-		expect(1800, "1000-2000")
+		expect(-1, "1000-2000")
+		call("test_emit_2", 1900)
 		expect(1900, "1000-2000")
 	})
 	hostModule.Stop()

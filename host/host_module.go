@@ -120,7 +120,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			if err == nil {
 				watch.ready.Done()
 			} else {
-				log.Printf(`__range_watch_start: Watch not found: %d`, binary.BigEndian.Uint64(id))
+				log.Printf(`__range_watch_start: Watch not found: %s`, string(id))
 			}
 			return
 		},
@@ -200,7 +200,11 @@ func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
 	} else if v := dst.Value(ctxKeyWatchList); v == nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
 	}
-	dst = context.WithValue(dst, ctxKeyGroup, h.groupID.Add(1))
+	if v := src.Value(ctxKeyGroup); v != nil {
+		dst = context.WithValue(dst, ctxKeyGroup, v.(uint64))
+	} else {
+		dst = context.WithValue(dst, ctxKeyGroup, h.groupID.Add(1))
+	}
 	return dst
 }
 
