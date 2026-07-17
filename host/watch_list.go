@@ -68,9 +68,13 @@ func (list *watchList) reserve(ctx context.Context, id []byte) (w *watch, err er
 func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
 	w, err = list.find(id)
 	if err == ErrWatchNotFound {
-		w, _ = list.reserve(ctx, id)
-	}
-	if w.intv != nil {
+		w, err = list.reserve(ctx, id)
+		if err != nil {
+			return
+		}
+	} else if err != nil {
+		return
+	} else if w.intv != nil {
 		err = ErrWatchAlreadyOpen
 		return
 	}
