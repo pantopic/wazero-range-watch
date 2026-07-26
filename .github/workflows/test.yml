@@ -22,8 +22,16 @@ jobs:
       with:
         tinygo-version: 0.38.0
 
+    - name: Set up Zig
+      uses: mlugg/setup-zig@v2
+      with:
+        version: 0.16.0
+
     - name: Build WASM
       run: cd test && tinygo build -buildmode=wasi-legacy -target=wasi -opt=2 -gc=conservative -scheduler=none -o ../host/test.wasm module.go
+
+    - name: Build WASM (Zig)
+      run: make wasm-zig
 
     - name: Test
       run: cd host && go test . -v -cover

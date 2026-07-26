@@ -1,0 +1,16 @@
+.{
+    .name = .test_zig,
+    .version = "0.0.1",
+    .fingerprint = 0xb8b3cc46a05e5aaa,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .range_watch = .{
+            .path = "../sdk-zig",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
