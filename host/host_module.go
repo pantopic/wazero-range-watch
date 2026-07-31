@@ -25,13 +25,16 @@ var (
 )
 
 type meta struct {
-	ptrBuf    uint32
-	ptrBufCap uint32
-	ptrBufLen uint32
-	ptrErr    uint32
-	ptrErrCap uint32
-	ptrErrLen uint32
-	ptrVal    uint32
+	ptrBuf     uint32
+	ptrBufCap  uint32
+	ptrBufLen  uint32
+	ptrErr     uint32
+	ptrErrCap  uint32
+	ptrErrLen  uint32
+	ptrVal     uint32
+	ptrVals    uint32
+	ptrValsCap uint32
+	ptrValsLen uint32
 }
 
 type hostModule struct {
@@ -40,6 +43,7 @@ type hostModule struct {
 
 	module  api.Module
 	groupID *atomic.Uint64
+	limit   int
 }
 
 type Option func(*hostModule)
@@ -66,10 +70,14 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		builder = builder.NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(fn), nil, nil).Export(name)
 	}
 	for name, fn := range map[string]any{
-		"__range_watch_flush": func(ctx context.Context, list *watchList, keys [][]byte, val uint64) {
-			for _, w := range list.tree.FindAny(keys...) {
-				w <- val
-			}
+		"__range_watch_queue": func(ctx context.Context, list *watchList, val uint64, keys [][]byte) {
+			list.queue(val, keys)
+		},
+		"__range_watch_flush": func(ctx context.Context, list *watchList) {
+			list.flush()
+		},
+		"__range_watch_clear": func(ctx context.Context, list *watchList) {
+			list.clear()
 		},
 		"__range_watch_reserve": func(ctx context.Context, list *watchList, id []byte) (err error) {
 			_, err = list.reserve(ctx, id)
@@ -85,18 +93,21 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				for {
 					select {
 					case val := <-watch.out:
-					drain:
-						for {
-							select {
-							case _ = <-watch.out:
-							default:
-								break drain
-							}
-						}
 						meta := get[*meta](ctx, ctxKeyMeta)
 						wazeropool.FromContext(ctx).Run(func(mod api.Module) {
 							setData(mod, meta, id[8:])
-							setVal(mod, meta, val)
+							valsCap := readUint32(mod, meta.ptrValsCap)
+							var i uint32 = 0
+						drain:
+							for ; i < valsCap; i++ {
+								setVals(mod, meta, i, val)
+								select {
+								case val = <-watch.out:
+								default:
+									break drain
+								}
+							}
+							setValsLen(mod, meta, i+1)
 							setErr(mod, meta, nil)
 							if _, err = mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
 								slog.Error("Error calling watch receive notice", "watchID", id, "err", err.Error())
@@ -134,10 +145,14 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		},
 	} {
 		switch fn := fn.(type) {
-		case func(ctx context.Context, watches *watchList, keys [][]byte, val uint64):
+		case func(ctx context.Context, watches *watchList):
+			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
+				fn(ctx, getWatchList(ctx))
+			})
+		case func(ctx context.Context, watches *watchList, val uint64, keys [][]byte):
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
-				fn(ctx, getWatchList(ctx), keys(m, meta), val(m, meta))
+				fn(ctx, getWatchList(ctx), val(m, meta), keys(m, meta))
 			})
 		case func(ctx context.Context, watches *watchList, id, from, to []byte) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
@@ -182,6 +197,9 @@ func (h *hostModule) InitContext(ctx context.Context, m api.Module) (context.Con
 		&meta.ptrErrCap,
 		&meta.ptrErrLen,
 		&meta.ptrVal,
+		&meta.ptrVals,
+		&meta.ptrValsCap,
+		&meta.ptrValsLen,
 	} {
 		*v = readUint32(m, ptr+uint32(4*i))
 	}
@@ -194,7 +212,6 @@ func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
 		return dst
 	}
 	dst = context.WithValue(dst, ctxKeyMeta, v.(*meta))
-	// dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
 	if v := src.Value(ctxKeyWatchList); v != nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
 	} else if v := dst.Value(ctxKeyWatchList); v == nil {
@@ -220,12 +237,12 @@ func dataBuf(m api.Module, meta *meta) []byte {
 	return read(m, meta.ptrBuf, 0, meta.ptrBufCap)
 }
 
-func setVal(m api.Module, meta *meta, val uint64) {
-	writeUint64(m, meta.ptrVal, val)
+func setVals(m api.Module, meta *meta, i uint32, val uint64) {
+	writeUint64(m, meta.ptrVals+(i*8), val)
 }
 
-func getVal(m api.Module, meta *meta) (val uint64) {
-	return readUint64(m, meta.ptrVal)
+func setValsLen(m api.Module, meta *meta, len uint32) {
+	writeUint32(m, meta.ptrValsLen, len)
 }
 
 func setData(m api.Module, meta *meta, b []byte) {

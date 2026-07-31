@@ -8,29 +8,50 @@ import (
 	"github.com/logbn/byteinterval"
 )
 
+type alert struct {
+	keys [][]byte
+	val  uint64
+}
+
 type watchList struct {
 	sync.RWMutex
 
-	items map[string]*watch
-	tree  *byteinterval.Tree[chan uint64]
+	items      map[string]*watch
+	tree       *byteinterval.Tree[chan uint64]
+	alerts     []alert
+	alertChan  chan []alert
+	alertMutex sync.Mutex
 }
 
 var watchListPool = sync.Pool{
 	New: func() any {
 		return &watchList{
-			items: make(map[string]*watch),
-			tree:  byteinterval.New[chan uint64](),
+			items:     make(map[string]*watch),
+			tree:      byteinterval.New[chan uint64](),
+			alertChan: make(chan []alert, 1e3),
 		}
 	},
 }
 
 func newWatchList(ctx context.Context) *watchList {
-	w := watchListPool.Get().(*watchList)
+	list := watchListPool.Get().(*watchList)
 	go func() {
-		<-ctx.Done()
-		w.release()
+		for {
+			select {
+			case batch := <-list.alertChan:
+				for _, a := range batch {
+					for _, w := range list.tree.FindAny(a.keys...) {
+						// TODO: push into alert pool, start alert worker
+						w <- a.val
+					}
+				}
+			case <-ctx.Done():
+				list.release()
+				return
+			}
+		}
 	}()
-	return w
+	return list
 }
 
 func (list *watchList) release() {
@@ -40,6 +61,10 @@ func (list *watchList) release() {
 	list.Lock()
 	for _, w := range list.items {
 		w._close()
+	}
+	list.clear()
+	for range <-list.alertChan {
+		// drain alert chan
 	}
 	list.Unlock()
 	watchListPool.Put(list)
@@ -92,6 +117,33 @@ func (list *watchList) find(id []byte) (w *watch, err error) {
 		err = ErrWatchNotFound
 	}
 	return
+}
+
+func (list *watchList) queue(val uint64, keys [][]byte) {
+	a := alert{val: val}
+	for _, k := range keys {
+		a.keys = append(a.keys, append(make([]byte, 0, len(k)), k...))
+	}
+	list.alertMutex.Lock()
+	defer list.alertMutex.Unlock()
+	list.alerts = append(list.alerts, a)
+}
+
+func (list *watchList) flush() {
+	if len(list.alerts) == 0 {
+		return
+	}
+	list.alertMutex.Lock()
+	alerts := list.alerts
+	list.alerts = []alert{}
+	list.alertMutex.Unlock()
+	list.alertChan <- alerts
+}
+
+func (list *watchList) clear() {
+	list.alertMutex.Lock()
+	list.alerts = list.alerts[:0]
+	list.alertMutex.Unlock()
 }
 
 func (w *watch) close() {

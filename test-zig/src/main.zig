@@ -7,20 +7,37 @@ export fn _start() void {
     range_watch.receive(recv) catch {};
 }
 
-fn recv(id: []const u8, val: u64) void {
-    var tmp: [64]u8 = undefined;
-    const line = std.fmt.bufPrint(&tmp, "{d},{s}\n", .{ val, id }) catch return;
+fn recv(id: []const u8, vals: []u64) void {
+    var tmp: [512]u8 = undefined;
+    const line = std.fmt.bufPrint(&tmp, "{s} {any}\n", .{ id, vals }) catch return;
     const iovs = [_]std.os.wasi.ciovec_t{.{ .base = line.ptr, .len = line.len }};
     var nwritten: usize = undefined;
     _ = std.os.wasi.fd_write(1, &iovs, iovs.len, &nwritten);
 }
 
 export fn test_emit(val: u32) void {
-    range_watch.emit(val, &.{
+    range_watch.queue(val, &.{
         "test-100",
         "test-200",
         "test-300",
     });
+    range_watch.flush() catch unreachable;
+}
+
+export fn test_queue(val: u32) void {
+    range_watch.queue(val, &.{
+        "test-100",
+        "test-200",
+        "test-300",
+    });
+}
+
+export fn test_flush() void {
+    range_watch.flush() catch unreachable;
+}
+
+export fn test_clear() void {
+    range_watch.clear() catch unreachable;
 }
 
 export fn test_create(from: u32, to: u32) void {
@@ -52,7 +69,8 @@ export fn test_start(from: u32, to: u32) void {
 
 export fn test_emit_2(val: u32) void {
     var kb: [32]u8 = undefined;
-    range_watch.emit(val, &.{key(&kb, val)});
+    range_watch.queue(val, &.{key(&kb, val)});
+    range_watch.flush() catch unreachable;
 }
 
 export fn test_stop(from: u32, to: u32) void {

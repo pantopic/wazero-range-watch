@@ -6,16 +6,19 @@ import (
 )
 
 var (
-	_bufCap uint32 = 16 << 10 // 16KB
-	_bufLen uint32
-	_buf           = make([]byte, int(_bufCap))
-	_errCap uint32 = 1 << 10 // 1KB
-	_errLen uint32
-	_err    = make([]byte, int(_errCap))
-	_val    uint64
-	meta    = make([]uint32, 7)
+	_bufCap  uint32 = 16 << 10 // 16KB
+	_bufLen  uint32
+	_buf            = make([]byte, int(_bufCap))
+	_errCap  uint32 = 1 << 10 // 1KB
+	_errLen  uint32
+	_val     uint64
+	_err            = make([]byte, int(_errCap))
+	_valsCap uint32 = 1e3
+	_valsLen uint32
+	_vals    = make([]uint64, _valsCap)
+	meta     = make([]uint32, 10)
 
-	recv func(id []byte, val uint64)
+	recv func(id []byte, vals []uint64)
 )
 
 //export __range_watch
@@ -28,6 +31,9 @@ func __range_watch() (res uint32) {
 		unsafe.Pointer(&_errCap),
 		unsafe.Pointer(&_errLen),
 		unsafe.Pointer(&_val),
+		unsafe.Pointer(&_vals[0]),
+		unsafe.Pointer(&_valsCap),
+		unsafe.Pointer(&_valsLen),
 	} {
 		meta[i] = uint32(uintptr(p))
 	}
@@ -36,7 +42,7 @@ func __range_watch() (res uint32) {
 
 //export __range_watch_recv
 func __range_watch_recv() {
-	recv(_buf[:_bufLen], _val)
+	recv(_buf[:_bufLen], _vals[:_valsLen])
 }
 
 func setData(b []byte) {
@@ -63,10 +69,6 @@ func appendKey(k []byte) bool {
 }
 
 //go:wasm-module pantopic/wazero-range-watch
-//export __range_watch_flush
-func _flush()
-
-//go:wasm-module pantopic/wazero-range-watch
 //export __range_watch_reserve
 func _reserve()
 
@@ -81,6 +83,18 @@ func _start()
 //go:wasm-module pantopic/wazero-range-watch
 //export __range_watch_stop
 func _stop()
+
+//go:wasm-module pantopic/wazero-range-watch
+//export __range_watch_queue
+func _queue()
+
+//go:wasm-module pantopic/wazero-range-watch
+//export __range_watch_flush
+func _flush()
+
+//go:wasm-module pantopic/wazero-range-watch
+//export __range_watch_clear
+func _clear()
 
 // Fix for lint rule `unusedfunc`
 var _ = __range_watch
