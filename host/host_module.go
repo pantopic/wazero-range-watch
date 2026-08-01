@@ -120,6 +120,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 							}
 						})
 					case <-watch.ctx.Done():
+						watch.close()
 						return
 					}
 				}

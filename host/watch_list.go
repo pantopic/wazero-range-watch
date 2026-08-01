@@ -155,7 +155,6 @@ func (w *watch) close() {
 func (w *watch) _close() {
 	w.intv.Remove()
 	w.cancel()
-	w.Wait()
 	delete(w.list.items, w.id)
 }
 
