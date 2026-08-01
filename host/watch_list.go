@@ -63,8 +63,14 @@ func (list *watchList) release() {
 		w._close()
 	}
 	list.clear()
-	for range <-list.alertChan {
+outer:
+	for {
 		// drain alert chan
+		select {
+		case <-list.alertChan:
+		default:
+			break outer
+		}
 	}
 	list.Unlock()
 	watchListPool.Put(list)

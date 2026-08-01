@@ -215,7 +215,7 @@ func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
 	dst = context.WithValue(dst, ctxKeyMeta, v.(*meta))
 	if v := src.Value(ctxKeyWatchList); v != nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
-	} else if v := dst.Value(ctxKeyWatchList); v == nil {
+	} else {
 		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
 	}
 	if v := src.Value(ctxKeyGroup); v != nil {
