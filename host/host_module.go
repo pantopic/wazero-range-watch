@@ -7,7 +7,6 @@ import (
 	"log"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -41,17 +40,14 @@ type hostModule struct {
 	sync.RWMutex
 	sync.WaitGroup
 
-	module  api.Module
-	groupID *atomic.Uint64
-	limit   int
+	module api.Module
+	limit  int
 }
 
 type Option func(*hostModule)
 
 func New(opts ...Option) (h *hostModule) {
-	h = &hostModule{
-		groupID: &atomic.Uint64{},
-	}
+	h = &hostModule{}
 	for _, opt := range opts {
 		opt(h)
 	}
@@ -79,35 +75,51 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		"__range_watch_clear": func(ctx context.Context, list *watchList) {
 			list.clear()
 		},
-		"__range_watch_reserve": func(ctx context.Context, list *watchList, id []byte) (err error) {
-			_, err = list.reserve(ctx, id)
+		"__range_watch_reserve": func(ctx context.Context, group *watchGroup, id []byte) (err error) {
+			_, err = group.reserve(ctx, id)
 			return
 		},
-		"__range_watch_open": func(ctx context.Context, list *watchList, id, from, to []byte) (err error) {
-			watch, err := list.open(ctx, id, from, to)
+		"__range_watch_open": func(ctx context.Context, group *watchGroup, id, from, to []byte) (err error) {
+			_, err = group.open(ctx, id, from, to)
 			if err != nil {
 				return
 			}
-			watch.Go(func() {
-				watch.ready.Wait()
+			return
+		},
+		"__range_watch_start": func(ctx context.Context, group *watchGroup, id []byte) (err error) {
+			watch := group.find(id)
+			if watch == nil {
+				return ErrWatchNotFound
+			}
+			go func() {
+				defer watch.sync()
+				meta := get[*meta](ctx, ctxKeyMeta)
+				var valsCap uint32
+				wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+					valsCap = readUint32(mod, meta.ptrValsCap)
+				})
 				for {
 					select {
-					case val := <-watch.out:
-						meta := get[*meta](ctx, ctxKeyMeta)
-						wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-							setData(mod, meta, id[8:])
-							valsCap := readUint32(mod, meta.ptrValsCap)
-							var i uint32 = 0
-						drain:
-							for ; i < valsCap; i++ {
-								setVals(mod, meta, i, val)
-								select {
-								case val = <-watch.out:
-								default:
-									break drain
-								}
+					case msg := <-watch.out:
+						msgs := []watchMsg{msg}
+					drain:
+						for {
+							select {
+							case msg = <-watch.out:
+								msgs = append(msgs, msg)
+							default:
+								break drain
 							}
-							setValsLen(mod, meta, i+1)
+							if len(msgs) >= int(valsCap) {
+								break drain
+							}
+						}
+						wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+							setData(mod, meta, id)
+							for i, m := range msgs {
+								setVals(mod, meta, uint32(i), m.val)
+							}
+							setValsLen(mod, meta, uint32(len(msgs)))
 							setErr(mod, meta, nil)
 							if _, err = mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
 								slog.Error("Error calling watch receive notice", "watchID", id, "err", err.Error())
@@ -115,34 +127,19 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 							}
 							if err = getErr(mod, meta); err != nil {
 								slog.Error("Error receiving watch notice", "watchID", id, "err", err.Error())
-								watch.close()
+								group.close(id)
 								return
 							}
 						})
-					case <-watch.ctx.Done():
-						watch.close()
+					default:
 						return
 					}
 				}
-			})
+			}()
 			return
 		},
-		"__range_watch_start": func(ctx context.Context, list *watchList, id []byte) (err error) {
-			watch, err := list.find(id)
-			if err == nil {
-				watch.ready.Done()
-			} else {
-				log.Printf(`__range_watch_start: Watch not found: %s`, string(id))
-			}
-			return
-		},
-		"__range_watch_stop": func(ctx context.Context, list *watchList, id []byte) (err error) {
-			watch, err := list.find(id)
-			if err != nil {
-				return
-			}
-			watch.close()
-			return
+		"__range_watch_stop": func(ctx context.Context, wg *watchGroup, id []byte) (err error) {
+			return wg.close(id)
 		},
 	} {
 		switch fn := fn.(type) {
@@ -155,23 +152,23 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				meta := get[*meta](ctx, ctxKeyMeta)
 				fn(ctx, getWatchList(ctx), val(m, meta), keys(m, meta))
 			})
-		case func(ctx context.Context, watches *watchList, id, from, to []byte) error:
+		case func(ctx context.Context, group *watchGroup, id, from, to []byte) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
 				k := keys(m, meta)
 				if len(k) != 3 {
 					panic(`expected 3 args`)
 				}
-				fn(ctx, getWatchList(ctx),
-					prependGroupID(ctx, k[0]),
+				fn(ctx, getWatchGroup(ctx),
+					append([]byte{}, k[0]...),
 					append([]byte{}, k[1]...),
 					append([]byte{}, k[2]...))
 				setErr(m, meta, err)
 			})
-		case func(ctx context.Context, watches *watchList, id []byte) error:
+		case func(ctx context.Context, wg *watchGroup, id []byte) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
-				err := fn(ctx, getWatchList(ctx), prependGroupID(ctx, getData(m, meta)))
+				err := fn(ctx, getWatchGroup(ctx), getData(m, meta))
 				setErr(m, meta, err)
 			})
 		default:
@@ -215,13 +212,13 @@ func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
 	dst = context.WithValue(dst, ctxKeyMeta, v.(*meta))
 	if v := src.Value(ctxKeyWatchList); v != nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
+		if v := src.Value(ctxKeyGroup); v != nil {
+			dst = context.WithValue(dst, ctxKeyGroup, v.(*watchGroup))
+		} else {
+			dst = context.WithValue(dst, ctxKeyGroup, newWatchGroup(dst))
+		}
 	} else {
 		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
-	}
-	if v := src.Value(ctxKeyGroup); v != nil {
-		dst = context.WithValue(dst, ctxKeyGroup, v.(uint64))
-	} else {
-		dst = context.WithValue(dst, ctxKeyGroup, h.groupID.Add(1))
 	}
 	return dst
 }
@@ -230,8 +227,8 @@ func getWatchList(ctx context.Context) *watchList {
 	return get[*watchList](ctx, ctxKeyWatchList)
 }
 
-func prependGroupID(ctx context.Context, b []byte) []byte {
-	return append(binary.BigEndian.AppendUint64([]byte{}, get[uint64](ctx, ctxKeyGroup)), b...)
+func getWatchGroup(ctx context.Context) *watchGroup {
+	return get[*watchGroup](ctx, ctxKeyGroup)
 }
 
 func dataBuf(m api.Module, meta *meta) []byte {

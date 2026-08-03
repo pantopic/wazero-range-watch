@@ -2,8 +2,8 @@ package wazero_range_watch
 
 import (
 	"context"
-	"encoding/hex"
 	"sync"
+	"sync/atomic"
 
 	"github.com/logbn/byteinterval"
 )
@@ -16,19 +16,21 @@ type alert struct {
 type watchList struct {
 	sync.RWMutex
 
-	items      map[string]*watch
-	tree       *byteinterval.Tree[chan uint64]
-	alerts     []alert
 	alertChan  chan []alert
 	alertMutex sync.Mutex
+	alerts     []alert
+	groupID    *atomic.Uint64
+	groups     map[uint64]*watchGroup
+	tree       *byteinterval.Tree[*watch]
 }
 
 var watchListPool = sync.Pool{
 	New: func() any {
 		return &watchList{
-			items:     make(map[string]*watch),
-			tree:      byteinterval.New[chan uint64](),
 			alertChan: make(chan []alert, 1e3),
+			groupID:   new(atomic.Uint64),
+			groups:    make(map[uint64]*watchGroup),
+			tree:      byteinterval.New[*watch](),
 		}
 	},
 }
@@ -41,8 +43,7 @@ func newWatchList(ctx context.Context) *watchList {
 			case batch := <-list.alertChan:
 				for _, a := range batch {
 					for _, w := range list.tree.FindAny(a.keys...) {
-						// TODO: push into alert pool, start alert worker
-						w <- a.val
+						w.send(a.val)
 					}
 				}
 			case <-ctx.Done():
@@ -59,8 +60,9 @@ func (list *watchList) release() {
 		return
 	}
 	list.Lock()
-	for _, w := range list.items {
-		w._close()
+	defer list.Unlock()
+	for _, w := range list.groups {
+		w.closeAll()
 	}
 	list.clear()
 outer:
@@ -72,57 +74,7 @@ outer:
 			break outer
 		}
 	}
-	list.Unlock()
 	watchListPool.Put(list)
-}
-
-func (list *watchList) reserve(ctx context.Context, id []byte) (w *watch, err error) {
-	k := hex.EncodeToString(id)
-	list.Lock()
-	defer list.Unlock()
-	w, ok := list.items[k]
-	if ok {
-		return w, ErrWatchExists
-	}
-	out := make(chan uint64, 1e3)
-	w = &watch{
-		id:    k,
-		out:   out,
-		list:  list,
-		ready: &sync.WaitGroup{},
-	}
-	w.ctx, w.cancel = context.WithCancel(ctx)
-	list.items[k] = w
-	return
-}
-
-func (list *watchList) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
-	w, err = list.find(id)
-	if err == ErrWatchNotFound {
-		w, err = list.reserve(ctx, id)
-		if err != nil {
-			return
-		}
-	} else if err != nil {
-		return
-	} else if w.intv != nil {
-		err = ErrWatchAlreadyOpen
-		return
-	}
-	w.intv = list.tree.Insert(from, to, w.out)
-	w.ready.Add(1)
-	return
-}
-
-func (list *watchList) find(id []byte) (w *watch, err error) {
-	k := hex.EncodeToString(id)
-	list.RLock()
-	defer list.RUnlock()
-	w, ok := list.items[k]
-	if !ok {
-		err = ErrWatchNotFound
-	}
-	return
 }
 
 func (list *watchList) queue(val uint64, keys [][]byte) {
@@ -152,27 +104,6 @@ func (list *watchList) clear() {
 	list.alertMutex.Unlock()
 }
 
-func (w *watch) close() {
-	w.list.Lock()
-	defer w.list.Unlock()
-	w._close()
-}
-
-func (w *watch) _close() {
-	w.intv.Remove()
-	w.cancel()
-	delete(w.list.items, w.id)
-}
-
-type watch struct {
-	sync.WaitGroup
-
-	cancel context.CancelFunc
-	ctx    context.Context
-	id     string
-	intv   *byteinterval.Interval[chan uint64]
-	list   *watchList
-	out    chan uint64
-	ready  *sync.WaitGroup
-	after  uint64
+func (list *watchList) size() int {
+	return list.tree.Size()
 }
