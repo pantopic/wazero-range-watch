@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"io"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,9 +18,26 @@ import (
 )
 
 //go:embed test\.wasm
-var testwasm []byte
+var testwasmGo []byte
+
+//go:embed test-zig\.wasm
+var testwasmZig []byte
 
 func TestModule(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wasm []byte
+	}{
+		{`go`, testwasmGo},
+		{`zig`, testwasmZig},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testModule(t, tc.wasm)
+		})
+	}
+}
+
+func testModule(t *testing.T, testwasm []byte) {
 	var (
 		ctx = context.Background()
 		out = &bytes.Buffer{}
@@ -59,19 +78,33 @@ func TestModule(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out.String())
 		}
 	}
-	read := func() (val int, id string) {
+	read := func() (id string, vals []int) {
 		line, err := out.ReadString('\n')
-		if line == "" {
-			return -1, ""
+		if err == io.EOF {
+			return "", []int{-1}
 		}
-		parts := strings.Split(line[:len(line)-1], ",")
-		if val, err = strconv.Atoi(parts[0]); err != nil {
+		if err != nil {
 			panic(err)
 		}
-		id = parts[1]
+		parts := strings.Split(line[:len(line)-1], " ")
+		if len(parts) < 2 {
+			t.Fatalf("Invalid output line: %s", line)
+		}
+		for _, s := range parts[1:] {
+			if s == "{" || s == "}" {
+				continue
+			}
+			s = strings.Trim(s, ",")
+			val, err := strconv.Atoi(s)
+			if err != nil {
+				panic(err)
+			}
+			vals = append(vals, val)
+		}
+		id = parts[0]
 		return
 	}
-	expect := func(val int, ids ...string) {
+	expect := func(vals []int, ids ...string) {
 		var m = make(map[string]bool)
 		for _, id := range ids {
 			m[id] = true
@@ -83,15 +116,20 @@ func TestModule(t *testing.T) {
 			if len(m) == 0 {
 				break
 			}
-			v, id := read()
-			if v != val {
-				t.Errorf("Value %d does not match %d for %s", v, val, id)
-				break
+			id, found := read()
+			var vm = map[int]bool{}
+			for _, v := range found {
+				vm[v] = true
+			}
+			for _, v := range vals {
+				if _, ok := vm[v]; !ok {
+					t.Errorf("Value %d missing for %s (%v)\n%s", v, id, vals, string(debug.Stack()))
+				}
 			}
 			if len(id) > 0 {
 				_, ok := m[id]
 				if !ok {
-					t.Errorf("ID %s incorrect for %d", id, val)
+					t.Errorf("ID %s incorrect for %v", id, vals)
 					break
 				}
 				delete(m, id)
@@ -105,22 +143,22 @@ func TestModule(t *testing.T) {
 	})
 	t.Run("emit", func(t *testing.T) {
 		call("test_emit", 1)
-		expect(1, "100-200")
+		expect([]int{1}, "100-200")
 		call("test_create", 200, 300)
 		call("test_emit", 2)
-		expect(2, "100-200", "200-300")
+		expect([]int{2}, "100-200", "200-300")
 		call("test_create", 500, 600)
 		call("test_emit", 3)
-		expect(3, "100-200", "200-300")
+		expect([]int{3}, "100-200", "200-300")
 		call("test_create", 250, 400)
 		call("test_emit", 4)
-		expect(4, "100-200", "200-300", "250-400")
+		expect([]int{4}, "100-200", "200-300", "250-400")
 	})
 	ctx = hostModule.ContextCopy(ctx, ctx)
 	t.Run("delete", func(t *testing.T) {
 		call("test_stop", 100, 200)
 		call("test_emit", 5)
-		expect(5, "200-300", "250-400")
+		expect([]int{5}, "200-300", "250-400")
 	})
 	t.Run("reserve", func(t *testing.T) {
 		call("test_reserve", 1000, 2000)
@@ -133,10 +171,10 @@ func TestModule(t *testing.T) {
 		call("test_emit_2", 1700)
 		call("test_start", 1000, 2000)
 		call("test_emit_2", 1800)
-		expect(1500, "1000-2000")
-		expect(-1, "1000-2000")
+		expect([]int{1500, 1600, 1700, 1800}, "1000-2000")
+		expect([]int{-1}, "1000-2000")
 		call("test_emit_2", 1900)
-		expect(1900, "1000-2000")
+		expect([]int{1900}, "1000-2000")
 	})
 	hostModule.Stop()
 }

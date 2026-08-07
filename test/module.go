@@ -12,17 +12,41 @@ func init() {
 
 func main() {}
 
-func recv(id []byte, val uint64) {
-	println(strconv.Itoa(int(val)) + `,` + string(id))
+func recv(id []byte, vals []uint64) {
+	s := string(id)
+	for _, v := range vals {
+		s += " " + strconv.FormatUint(v, 10)
+	}
+	println(s)
 }
 
 //export test_emit
 func test_emit(val uint32) {
-	range_watch.Emit(uint64(val), [][]byte{
+	range_watch.Queue(uint64(val), [][]byte{
 		[]byte(`test-100`),
 		[]byte(`test-200`),
 		[]byte(`test-300`),
 	})
+	range_watch.Flush()
+}
+
+//export test_queue
+func test_queue(val uint32) {
+	range_watch.Queue(uint64(val), [][]byte{
+		[]byte(`test-100`),
+		[]byte(`test-200`),
+		[]byte(`test-300`),
+	})
+}
+
+//export test_flush
+func test_flush() {
+	range_watch.Flush()
+}
+
+//export test_clear
+func test_clear() {
+	range_watch.Clear()
 }
 
 //export test_create
@@ -57,9 +81,10 @@ func test_start(from, to uint32) {
 
 //export test_emit_2
 func test_emit_2(val uint32) {
-	range_watch.Emit(uint64(val), [][]byte{
+	range_watch.Queue(uint64(val), [][]byte{
 		[]byte(`test-` + strconv.Itoa(int(val))),
 	})
+	range_watch.Flush()
 }
 
 //export test_stop
@@ -75,6 +100,9 @@ func watchID(from, to uint32) []byte {
 
 // Fix for lint rule `unusedfunc`
 var _ = test_emit
+var _ = test_queue
+var _ = test_flush
+var _ = test_clear
 var _ = test_reserve
 var _ = test_create
 var _ = test_open
