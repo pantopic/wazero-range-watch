@@ -141,6 +141,12 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		"__range_watch_stop": func(ctx context.Context, wg *watchGroup, id []byte) (err error) {
 			return wg.close(id)
 		},
+		"__range_watch_group_start": func(ctx context.Context, wg *watchGroup) {
+			wg.start(ctx)
+		},
+		"__range_watch_group_stop": func(ctx context.Context, wg *watchGroup) {
+			wg.closeAll()
+		},
 	} {
 		switch fn := fn.(type) {
 		case func(ctx context.Context, watches *watchList):
@@ -170,6 +176,10 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				meta := get[*meta](ctx, ctxKeyMeta)
 				err := fn(ctx, getWatchGroup(ctx), getData(m, meta))
 				setErr(m, meta, err)
+			})
+		case func(ctx context.Context, wg *watchGroup):
+			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
+				fn(ctx, getWatchGroup(ctx))
 			})
 		default:
 			log.Panicf("Method signature implementation missing: %#v", fn)
@@ -212,7 +222,7 @@ func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
 	dst = context.WithValue(dst, ctxKeyMeta, v.(*meta))
 	if v := src.Value(ctxKeyWatchList); v != nil {
 		dst = context.WithValue(dst, ctxKeyWatchList, v.(*watchList))
-		if v := src.Value(ctxKeyGroup); v != nil {
+		if v := src.Value(ctxKeyGroup); v != nil && v.(*watchGroup).active {
 			dst = context.WithValue(dst, ctxKeyGroup, v.(*watchGroup))
 		} else {
 			dst = context.WithValue(dst, ctxKeyGroup, newWatchGroup(dst))

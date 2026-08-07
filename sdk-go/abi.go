@@ -96,6 +96,14 @@ func _flush()
 //export __range_watch_clear
 func _clear()
 
+//go:wasm-module pantopic/wazero-range-watch
+//export __range_watch_group_start
+func _group_start()
+
+//go:wasm-module pantopic/wazero-range-watch
+//export __range_watch_group_stop
+func _group_stop()
+
 // Fix for lint rule `unusedfunc`
 var _ = __range_watch
 var _ = __range_watch_recv

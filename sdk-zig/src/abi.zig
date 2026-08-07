@@ -50,6 +50,8 @@ pub extern "pantopic/wazero-range-watch" fn __range_watch_reserve() void;
 pub extern "pantopic/wazero-range-watch" fn __range_watch_open() void;
 pub extern "pantopic/wazero-range-watch" fn __range_watch_start() void;
 pub extern "pantopic/wazero-range-watch" fn __range_watch_stop() void;
+pub extern "pantopic/wazero-range-watch" fn __range_watch_group_start() void;
+pub extern "pantopic/wazero-range-watch" fn __range_watch_group_stop() void;
 
 pub fn setData(b: []const u8) void {
     _buf_len = @intCast(b.len);

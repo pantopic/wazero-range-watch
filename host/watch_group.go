@@ -22,23 +22,15 @@ type watchGroup struct {
 	id      uint64
 	list    *watchList
 	out     chan watchMsg
-	running bool
+	active  bool
 	watches map[string]*watch
 }
 
-func newWatchGroup(ctx context.Context) (w *watchGroup) {
+func newWatchGroup(ctx context.Context) (wg *watchGroup) {
 	list := getWatchList(ctx)
-	id := list.groupID.Add(1)
-	w = &watchGroup{
-		ctx:     ctx,
-		id:      id,
-		list:    list,
-		out:     make(chan watchMsg, 1e3),
-		watches: make(map[string]*watch),
+	wg = &watchGroup{
+		list: list,
 	}
-	list.Lock()
-	list.groups[id] = w
-	list.Unlock()
 	return
 }
 
@@ -56,7 +48,6 @@ func (wg *watchGroup) _reserve(ctx context.Context, id []byte) (w *watch, err er
 	}
 	w = &watch{
 		group: wg,
-		ctx:   ctx,
 		id:    append([]byte{}, id...),
 		out:   make(chan watchMsg, 1e3),
 	}
@@ -67,13 +58,12 @@ func (wg *watchGroup) _reserve(ctx context.Context, id []byte) (w *watch, err er
 func (wg *watchGroup) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
 	wg.Lock()
 	defer wg.Unlock()
+	if !wg.active {
+		return nil, ErrWatchGroupNotActive
+	}
 	w, err = wg._reserve(ctx, id)
 	if err == ErrWatchExists && w.intv != nil {
 		return nil, ErrWatchAlreadyOpen
-	}
-	if !wg.running {
-		wg.running = true
-		wg.start(ctx)
 	}
 	w.intv = wg.list.tree.Insert(from, to, w)
 	return
@@ -86,8 +76,8 @@ func (wg *watchGroup) find(id []byte) *watch {
 }
 
 func (wg *watchGroup) close(id []byte) (err error) {
-	wg.list.Lock()
-	defer wg.list.Unlock()
+	wg.Lock()
+	defer wg.Unlock()
 	k := wg.key(id)
 	w, ok := wg.watches[k]
 	if !ok {
@@ -99,10 +89,15 @@ func (wg *watchGroup) close(id []byte) (err error) {
 }
 
 func (wg *watchGroup) closeAll() (err error) {
+	wg.Lock()
+	defer wg.Unlock()
 	for k, w := range wg.watches {
 		w.intv.Remove()
 		delete(wg.watches, k)
 	}
+	wg.list.Lock()
+	delete(wg.list.groups, wg.id)
+	wg.list.Unlock()
 	return
 }
 
@@ -111,10 +106,19 @@ func (wg *watchGroup) key(id []byte) string {
 }
 
 func (wg *watchGroup) start(ctx context.Context) {
+	wg.Lock()
+	defer wg.Unlock()
+	wg.id = wg.list.groupID.Add(1)
+	wg.out = make(chan watchMsg, 1e3)
+	wg.watches = make(map[string]*watch)
+	wg.active = true
 	var i int = 0
-	var limit int = 1e5
+	var limit int = 1e4
 	var batches = make(chan map[string][]watchMsg)
 	meta := get[*meta](ctx, ctxKeyMeta)
+	wg.list.Lock()
+	wg.list.groups[wg.id] = wg
+	wg.list.Unlock()
 	wg.Go(func() {
 		var valsCap uint32
 		wazeropool.FromContext(ctx).Run(func(mod api.Module) {
@@ -127,9 +131,9 @@ func (wg *watchGroup) start(ctx context.Context) {
 			m := make(map[string][]watchMsg)
 			select {
 			case msg := <-wg.out:
+				t.Reset(50 * time.Millisecond)
 			drain:
 				for {
-					t.Reset(50 * time.Millisecond)
 					i++
 					k := fmt.Sprintf(`%x`, msg.id)
 					if _, ok := m[k]; !ok {
@@ -152,7 +156,7 @@ func (wg *watchGroup) start(ctx context.Context) {
 						break drain
 					}
 				}
-			case <-wg.ctx.Done():
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -169,7 +173,7 @@ func (wg *watchGroup) start(ctx context.Context) {
 						}
 						setValsLen(mod, meta, uint32(len(msgs)))
 						setErr(mod, meta, nil)
-						if _, err := mod.ExportedFunction("__range_watch_recv").Call(msgs[0].ctx); err != nil {
+						if _, err := mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
 							slog.Error("Error __range_watch_recv A", "watchID", msgs[0].id, "err", err.Error())
 							return
 						}

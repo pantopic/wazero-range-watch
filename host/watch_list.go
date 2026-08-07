@@ -61,8 +61,8 @@ func (list *watchList) release() {
 	}
 	list.Lock()
 	defer list.Unlock()
-	for _, w := range list.groups {
-		w.closeAll()
+	for _, wg := range list.groups {
+		wg.closeAll()
 	}
 	list.clear()
 outer:
@@ -102,8 +102,4 @@ func (list *watchList) clear() {
 	list.alertMutex.Lock()
 	list.alerts = list.alerts[:0]
 	list.alertMutex.Unlock()
-}
-
-func (list *watchList) size() int {
-	return list.tree.Size()
 }

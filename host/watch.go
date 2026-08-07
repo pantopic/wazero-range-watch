@@ -1,7 +1,6 @@
 package wazero_range_watch
 
 import (
-	"context"
 	"sync"
 
 	"github.com/logbn/byteinterval"
@@ -11,7 +10,6 @@ type watch struct {
 	sync.RWMutex
 
 	group  *watchGroup
-	ctx    context.Context
 	id     []byte
 	intv   *byteinterval.Interval[*watch]
 	out    chan watchMsg
@@ -21,7 +19,7 @@ type watch struct {
 func (w *watch) send(val uint64) {
 	w.RLock()
 	defer w.RUnlock()
-	w.out <- watchMsg{w.id, w.ctx, val}
+	w.out <- watchMsg{w.id, val}
 }
 
 func (w *watch) sync() {
@@ -38,6 +36,5 @@ func (w *watch) sync() {
 
 type watchMsg struct {
 	id  []byte
-	ctx context.Context
 	val uint64
 }

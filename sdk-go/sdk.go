@@ -67,3 +67,13 @@ func Stop(id []byte) error {
 	_stop()
 	return getErr()
 }
+
+// GroupStart starts the watch group
+func GroupStart() {
+	_group_start()
+}
+
+// GroupStop stops the watch group
+func GroupStop() {
+	_group_stop()
+}

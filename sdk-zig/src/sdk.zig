@@ -75,3 +75,13 @@ pub fn stop(id: []const u8) Error!void {
 pub fn lastError() []const u8 {
     return abi._err[0..abi._err_len];
 }
+
+/// Starts the watch group
+pub fn groupStart() void {
+    abi.__range_watch_group_start();
+}
+
+/// Stops the watch group
+pub fn groupStop() void {
+    abi.__range_watch_group_stop();
+}
