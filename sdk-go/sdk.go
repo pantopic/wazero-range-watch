@@ -1,7 +1,7 @@
 package range_watch
 
 // Receive registers a callback to receive watch notices
-func Receive(fn func(id []byte, vals []uint64)) (err error) {
+func Receive(fn func(items []Notice)) (err error) {
 	if recv != nil {
 		return ErrWatchReceiveAlreadyRegistered
 	}

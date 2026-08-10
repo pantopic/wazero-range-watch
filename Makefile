@@ -1,5 +1,5 @@
 wasm:
-	@cd test && tinygo build -buildmode=wasi-legacy -target=wasi -opt=z -gc=leaking -scheduler=none -o ../host/test.wasm -no-debug module.go
+	@cd test && tinygo build -buildmode=wasi-legacy -target=wasi -opt=z -gc=leaking -scheduler=none -o ../host/test.wasm module.go
 
 wasm-zig:
 	@cd test-zig && zig build --release=small

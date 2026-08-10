@@ -24,16 +24,13 @@ var (
 )
 
 type meta struct {
-	ptrBuf     uint32
-	ptrBufCap  uint32
-	ptrBufLen  uint32
-	ptrErr     uint32
-	ptrErrCap  uint32
-	ptrErrLen  uint32
-	ptrVal     uint32
-	ptrVals    uint32
-	ptrValsCap uint32
-	ptrValsLen uint32
+	ptrBuf    uint32
+	ptrBufCap uint32
+	ptrBufLen uint32
+	ptrErr    uint32
+	ptrErrCap uint32
+	ptrErrLen uint32
+	ptrVal    uint32
 }
 
 type hostModule struct {
@@ -91,51 +88,74 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			if watch == nil {
 				return ErrWatchNotFound
 			}
-			go func() {
-				defer watch.sync()
-				meta := get[*meta](ctx, ctxKeyMeta)
-				var valsCap uint32
-				wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-					valsCap = readUint32(mod, meta.ptrValsCap)
-				})
+			meta := get[*meta](ctx, ctxKeyMeta)
+			var val uint64 = 0
+			var batches = make(chan []byte)
+			var bufCap uint32
+			wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+				bufCap = readUint32(mod, meta.ptrBufCap)
+			})
+			var bufPool = sync.Pool{
+				New: func() any { return make([]byte, 0, bufCap) },
+			}
+			var wg sync.WaitGroup
+			wg.Go(func() {
 				for {
+					val = 0
+					buf := bufPool.Get().([]byte)[:0]
 					select {
-					case msg := <-watch.out:
-						msgs := []watchMsg{msg}
+					case msg, ok := <-watch.out:
+						if !ok {
+							close(batches)
+							return
+						}
 					drain:
 						for {
+							if len(buf)+len(msg.id)+8 >= cap(buf) {
+								batches <- buf
+								buf = bufPool.Get().([]byte)[:0]
+								val = 0
+							}
+							if msg.val != val {
+								val = msg.val
+								if len(buf) > 0 {
+									buf = binary.BigEndian.AppendUint16(buf, 0)
+								}
+								buf = binary.BigEndian.AppendUint64(buf, val)
+							}
+							buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.id)))
+							buf = append(buf, msg.id...)
 							select {
 							case msg = <-watch.out:
-								msgs = append(msgs, msg)
 							default:
-								break drain
-							}
-							if len(msgs) >= int(valsCap) {
+								batches <- buf
 								break drain
 							}
 						}
-						wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-							setData(mod, meta, id)
-							for i, m := range msgs {
-								setVals(mod, meta, uint32(i), m.val)
-							}
-							setValsLen(mod, meta, uint32(len(msgs)))
-							setErr(mod, meta, nil)
-							if _, err = mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
-								slog.Error("Error calling watch receive notice", "watchID", id, "err", err.Error())
-								return
-							}
-							if err = getErr(mod, meta); err != nil {
-								slog.Error("Error receiving watch notice", "watchID", id, "err", err.Error())
-								group.close(id)
-								return
-							}
-						})
 					default:
+						watch.sync()
+					case <-ctx.Done():
 						return
 					}
 				}
-			}()
+			})
+			wg.Go(func() {
+				for b := range batches {
+					wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+						setData(mod, meta, b)
+						setErr(mod, meta, nil)
+						if _, err := mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
+							slog.Error("Error __range_watch_recv A", "err", err.Error())
+							return
+						}
+						if err := getErr(mod, meta); err != nil {
+							slog.Error("Error __range_watch_recv B", "err", err.Error())
+							return
+						}
+					})
+					bufPool.Put(b[:0])
+				}
+			})
 			return
 		},
 		"__range_watch_stop": func(ctx context.Context, wg *watchGroup, id []byte) (err error) {
@@ -205,9 +225,6 @@ func (h *hostModule) InitContext(ctx context.Context, m api.Module) (context.Con
 		&meta.ptrErrCap,
 		&meta.ptrErrLen,
 		&meta.ptrVal,
-		&meta.ptrVals,
-		&meta.ptrValsCap,
-		&meta.ptrValsLen,
 	} {
 		*v = readUint32(m, ptr+uint32(4*i))
 	}
@@ -243,14 +260,6 @@ func getWatchGroup(ctx context.Context) *watchGroup {
 
 func dataBuf(m api.Module, meta *meta) []byte {
 	return read(m, meta.ptrBuf, 0, meta.ptrBufCap)
-}
-
-func setVals(m api.Module, meta *meta, i uint32, val uint64) {
-	writeUint64(m, meta.ptrVals+(i*8), val)
-}
-
-func setValsLen(m api.Module, meta *meta, len uint32) {
-	writeUint32(m, meta.ptrValsLen, len)
 }
 
 func setData(m api.Module, meta *meta, b []byte) {

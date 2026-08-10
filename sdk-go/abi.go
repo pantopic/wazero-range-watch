@@ -5,20 +5,22 @@ import (
 	"unsafe"
 )
 
-var (
-	_bufCap  uint32 = 16 << 10 // 16KB
-	_bufLen  uint32
-	_buf            = make([]byte, int(_bufCap))
-	_errCap  uint32 = 1 << 10 // 1KB
-	_errLen  uint32
-	_val     uint64
-	_err            = make([]byte, int(_errCap))
-	_valsCap uint32 = 1e3
-	_valsLen uint32
-	_vals    = make([]uint64, _valsCap)
-	meta     = make([]uint32, 10)
+type Notice struct {
+	Val uint64
+	IDs [][]byte
+}
 
-	recv func(id []byte, vals []uint64)
+var (
+	_bufCap uint32 = 16 << 10 // 16KB
+	_bufLen uint32
+	_buf           = make([]byte, int(_bufCap))
+	_errCap uint32 = 1 << 10 // 1KB
+	_errLen uint32
+	_val    uint64
+	_err    = make([]byte, int(_errCap))
+	meta    = make([]uint32, 7)
+
+	recv func(items []Notice)
 )
 
 //export __range_watch
@@ -31,18 +33,35 @@ func __range_watch() (res uint32) {
 		unsafe.Pointer(&_errCap),
 		unsafe.Pointer(&_errLen),
 		unsafe.Pointer(&_val),
-		unsafe.Pointer(&_vals[0]),
-		unsafe.Pointer(&_valsCap),
-		unsafe.Pointer(&_valsLen),
 	} {
 		meta[i] = uint32(uintptr(p))
 	}
 	return uint32(uintptr(unsafe.Pointer(&meta[0])))
 }
 
+var notices []Notice
+
 //export __range_watch_recv
 func __range_watch_recv() {
-	recv(_buf[:_bufLen], _vals[:_valsLen])
+	notices = notices[:0]
+	for i := uint32(0); i < _bufLen; {
+		var n Notice
+		n.Val = binary.BigEndian.Uint64(_buf[i:])
+		i += 8
+		for i < _bufLen {
+			var idLen = binary.BigEndian.Uint16(_buf[i:])
+			i += 2
+			if idLen == 0 {
+				break
+			}
+			b := make([]byte, idLen)
+			copy(b, _buf[i:i+uint32(idLen)])
+			n.IDs = append(n.IDs, b)
+			i += uint32(idLen)
+		}
+		notices = append(notices, n)
+	}
+	recv(notices)
 }
 
 func setData(b []byte) {

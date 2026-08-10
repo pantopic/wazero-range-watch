@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/tetratelabs/wazero/api"
 
@@ -27,10 +25,7 @@ type watchGroup struct {
 }
 
 func newWatchGroup(ctx context.Context) (wg *watchGroup) {
-	list := getWatchList(ctx)
-	wg = &watchGroup{
-		list: list,
-	}
+	wg = &watchGroup{}
 	return
 }
 
@@ -49,7 +44,7 @@ func (wg *watchGroup) _reserve(ctx context.Context, id []byte) (w *watch, err er
 	w = &watch{
 		group: wg,
 		id:    append([]byte{}, id...),
-		out:   make(chan watchMsg, 1e3),
+		out:   make(chan watchMsg, 1<<10),
 	}
 	wg.watches[k] = w
 	return
@@ -108,51 +103,50 @@ func (wg *watchGroup) key(id []byte) string {
 func (wg *watchGroup) start(ctx context.Context) {
 	wg.Lock()
 	defer wg.Unlock()
+	wg.list = getWatchList(ctx)
 	wg.id = wg.list.groupID.Add(1)
-	wg.out = make(chan watchMsg, 1e3)
+	wg.out = make(chan watchMsg, 100<<10)
 	wg.watches = make(map[string]*watch)
 	wg.active = true
-	var i int = 0
-	var limit int = 1e4
-	var batches = make(chan map[string][]watchMsg)
-	meta := get[*meta](ctx, ctxKeyMeta)
 	wg.list.Lock()
 	wg.list.groups[wg.id] = wg
 	wg.list.Unlock()
+	var meta = get[*meta](ctx, ctxKeyMeta)
+	var bufCap uint32
+	wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+		bufCap = readUint32(mod, meta.ptrBufCap)
+	})
+	var bufPool = sync.Pool{
+		New: func() any { return make([]byte, 0, bufCap) },
+	}
+	var batches = make(chan []byte)
 	wg.Go(func() {
-		var valsCap uint32
-		wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-			valsCap = readUint32(mod, meta.ptrValsCap)
-		})
-		t := time.NewTicker(50 * time.Millisecond)
-		defer t.Stop()
+		var val uint64
 		for {
-			i = 0
-			m := make(map[string][]watchMsg)
+			val = 0
+			buf := bufPool.Get().([]byte)[:0]
 			select {
 			case msg := <-wg.out:
-				t.Reset(50 * time.Millisecond)
 			drain:
 				for {
-					i++
-					k := fmt.Sprintf(`%x`, msg.id)
-					if _, ok := m[k]; !ok {
-						m[k] = append([]watchMsg{}, msg)
-					} else {
-						m[k] = append(m[k], msg)
+					if len(buf)+len(msg.id)+8 >= cap(buf) {
+						batches <- buf
+						buf = bufPool.Get().([]byte)[:0]
+						val = 0
 					}
-					if len(m[k]) >= int(valsCap) {
-						batches <- m
-						break drain
+					if msg.val != val {
+						val = msg.val
+						if len(buf) > 0 {
+							buf = binary.BigEndian.AppendUint16(buf, 0)
+						}
+						buf = binary.BigEndian.AppendUint64(buf, val)
 					}
+					buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.id)))
+					buf = append(buf, msg.id...)
 					select {
 					case msg = <-wg.out:
-					case <-t.C:
-						batches <- m
-						break drain
-					}
-					if i >= limit {
-						batches <- m
+					default:
+						batches <- buf
 						break drain
 					}
 				}
@@ -162,30 +156,21 @@ func (wg *watchGroup) start(ctx context.Context) {
 		}
 	})
 	wg.Go(func() {
-		for m := range batches {
-			var g sync.WaitGroup
-			for _, msgs := range m {
-				g.Go(func() {
-					wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-						setData(mod, meta, msgs[0].id)
-						for i, m := range msgs {
-							setVals(mod, meta, uint32(i), m.val)
-						}
-						setValsLen(mod, meta, uint32(len(msgs)))
-						setErr(mod, meta, nil)
-						if _, err := mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
-							slog.Error("Error __range_watch_recv A", "watchID", msgs[0].id, "err", err.Error())
-							return
-						}
-						if err := getErr(mod, meta); err != nil {
-							slog.Error("Error __range_watch_recv B", "watchID", msgs[0].id, "err", err.Error())
-							wg.close(msgs[0].id)
-							return
-						}
-					})
-				})
-			}
-			g.Wait()
+		for b := range batches {
+			wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+				setData(mod, meta, b)
+				setErr(mod, meta, nil)
+				if _, err := mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
+					slog.Error("Error __range_watch_recv A", "err", err.Error())
+					return
+				}
+				if err := getErr(mod, meta); err != nil {
+					slog.Error("Error __range_watch_recv B", "err", err.Error())
+					wg.closeAll()
+					return
+				}
+			})
+			bufPool.Put(b)
 		}
 	})
 }
