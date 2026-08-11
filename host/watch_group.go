@@ -16,12 +16,13 @@ type watchGroup struct {
 	sync.WaitGroup
 	sync.RWMutex
 
-	ctx     context.Context
-	id      uint64
-	list    *watchList
-	out     chan watchMsg
-	active  bool
-	watches map[string]*watch
+	ctx      context.Context
+	id       uint64
+	list     *watchList
+	out      chan []watchMsg
+	active   bool
+	watches  map[string]*watch
+	unsynced map[string]*watch
 }
 
 func newWatchGroup(ctx context.Context) (wg *watchGroup) {
@@ -32,10 +33,10 @@ func newWatchGroup(ctx context.Context) (wg *watchGroup) {
 func (wg *watchGroup) reserve(ctx context.Context, id []byte) (w *watch, err error) {
 	wg.Lock()
 	defer wg.Unlock()
-	return wg._reserve(ctx, id)
+	return wg._reserve(ctx, id, false)
 }
 
-func (wg *watchGroup) _reserve(ctx context.Context, id []byte) (w *watch, err error) {
+func (wg *watchGroup) _reserve(ctx context.Context, id []byte, synced bool) (w *watch, err error) {
 	var k = wg.key(id)
 	var ok bool
 	if w, ok = wg.watches[k]; ok {
@@ -44,23 +45,31 @@ func (wg *watchGroup) _reserve(ctx context.Context, id []byte) (w *watch, err er
 	w = &watch{
 		group: wg,
 		id:    append([]byte{}, id...),
+		key:   k,
 		out:   make(chan watchMsg, 1<<10),
 	}
 	wg.watches[k] = w
+	if !synced {
+		wg.unsynced[k] = w
+	}
 	return
 }
 
-func (wg *watchGroup) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
+func (wg *watchGroup) open(ctx context.Context, id, from, to []byte, synced bool) (w *watch, err error) {
 	wg.Lock()
 	defer wg.Unlock()
 	if !wg.active {
 		return nil, ErrWatchGroupNotActive
 	}
-	w, err = wg._reserve(ctx, id)
+	w, err = wg._reserve(ctx, id, synced)
 	if err == ErrWatchExists && w.intv != nil {
 		return nil, ErrWatchAlreadyOpen
 	}
 	w.intv = wg.list.tree.Insert(from, to, w)
+	if synced {
+		w.synced = true
+		delete(wg.unsynced, w.key)
+	}
 	return
 }
 
@@ -93,6 +102,7 @@ func (wg *watchGroup) closeAll() (err error) {
 	wg.list.Lock()
 	delete(wg.list.groups, wg.id)
 	wg.list.Unlock()
+	close(wg.out)
 	return
 }
 
@@ -105,8 +115,9 @@ func (wg *watchGroup) start(ctx context.Context) {
 	defer wg.Unlock()
 	wg.list = getWatchList(ctx)
 	wg.id = wg.list.groupID.Add(1)
-	wg.out = make(chan watchMsg, 100<<10)
+	wg.out = make(chan []watchMsg, 10<<10)
 	wg.watches = make(map[string]*watch)
+	wg.unsynced = make(map[string]*watch)
 	wg.active = true
 	wg.list.Lock()
 	wg.list.groups[wg.id] = wg
@@ -126,9 +137,22 @@ func (wg *watchGroup) start(ctx context.Context) {
 			val = 0
 			buf := bufPool.Get().([]byte)[:0]
 			select {
-			case msg := <-wg.out:
+			case msgs, ok := <-wg.out:
+				if !ok {
+					close(batches)
+					return
+				}
+				wg.RLock()
 			drain:
-				for {
+				for _, msg := range msgs {
+					if len(wg.unsynced) > 0 {
+						k := wg.key(msg.id)
+						if wg.unsynced[k] != nil {
+							if wg.unsynced[k].send(msg.val) {
+								continue
+							}
+						}
+					}
 					if len(buf)+len(msg.id)+8 >= cap(buf) {
 						batches <- buf
 						buf = bufPool.Get().([]byte)[:0]
@@ -143,14 +167,16 @@ func (wg *watchGroup) start(ctx context.Context) {
 					}
 					buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.id)))
 					buf = append(buf, msg.id...)
-					select {
-					case msg = <-wg.out:
-					default:
-						batches <- buf
-						break drain
-					}
 				}
+				select {
+				case msgs = <-wg.out:
+					goto drain
+				default:
+				}
+				wg.RUnlock()
+				batches <- buf
 			case <-ctx.Done():
+				close(batches)
 				return
 			}
 		}

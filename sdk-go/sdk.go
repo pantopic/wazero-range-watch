@@ -50,6 +50,18 @@ func Open(id, from, to []byte) error {
 	appendKey(id)
 	appendKey(from)
 	appendKey(to)
+	_val = 0
+	_open()
+	return getErr()
+}
+
+// OpenStart starts receiving and processing values in one step
+func OpenStart(id, from, to []byte) error {
+	_bufLen = 0
+	appendKey(id)
+	appendKey(from)
+	appendKey(to)
+	_val = 1
 	_open()
 	return getErr()
 }

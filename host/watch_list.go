@@ -38,14 +38,19 @@ var watchListPool = sync.Pool{
 func newWatchList(ctx context.Context) *watchList {
 	list := watchListPool.Get().(*watchList)
 	go func() {
+		var m = make(map[*watchGroup][]watchMsg)
 		for {
 			select {
 			case batch := <-list.alertChan:
 				for _, a := range batch {
 					for _, w := range list.tree.FindAny(a.keys...) {
-						w.send(a.val)
+						m[w.group] = append(m[w.group], watchMsg{w.id, a.val})
 					}
 				}
+				for wg, msgs := range m {
+					wg.out <- msgs
+				}
+				clear(m)
 			case <-ctx.Done():
 				list.release()
 				return

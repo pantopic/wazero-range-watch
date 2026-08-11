@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -76,8 +77,8 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			_, err = group.reserve(ctx, id)
 			return
 		},
-		"__range_watch_open": func(ctx context.Context, group *watchGroup, id, from, to []byte) (err error) {
-			_, err = group.open(ctx, id, from, to)
+		"__range_watch_open": func(ctx context.Context, group *watchGroup, id, from, to []byte, synced bool) (err error) {
+			_, err = group.open(ctx, id, from, to, synced)
 			if err != nil {
 				return
 			}
@@ -87,6 +88,9 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			watch := group.find(id)
 			if watch == nil {
 				return ErrWatchNotFound
+			}
+			if watch.isSynced() {
+				return
 			}
 			meta := get[*meta](ctx, ctxKeyMeta)
 			var val uint64 = 0
@@ -98,8 +102,8 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			var bufPool = sync.Pool{
 				New: func() any { return make([]byte, 0, bufCap) },
 			}
-			var wg sync.WaitGroup
-			wg.Go(func() {
+			watch.Go(func() {
+				var closed bool
 				for {
 					val = 0
 					buf := bufPool.Get().([]byte)[:0]
@@ -133,13 +137,22 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 							}
 						}
 					default:
-						watch.sync()
+						if !closed {
+							go watch.sync()
+							closed = true
+						} else {
+							time.Sleep(time.Millisecond)
+						}
 					case <-ctx.Done():
+						if !closed {
+							go watch.sync()
+							closed = true
+						}
 						return
 					}
 				}
 			})
-			wg.Go(func() {
+			watch.Go(func() {
 				for b := range batches {
 					wazeropool.FromContext(ctx).Run(func(mod api.Module) {
 						setData(mod, meta, b)
@@ -176,9 +189,9 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		case func(ctx context.Context, watches *watchList, val uint64, keys [][]byte):
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
-				fn(ctx, getWatchList(ctx), val(m, meta), keys(m, meta))
+				fn(ctx, getWatchList(ctx), getVal(m, meta), keys(m, meta))
 			})
-		case func(ctx context.Context, group *watchGroup, id, from, to []byte) error:
+		case func(ctx context.Context, group *watchGroup, id, from, to []byte, synced bool) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
 				k := keys(m, meta)
@@ -188,7 +201,8 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				fn(ctx, getWatchGroup(ctx),
 					append([]byte{}, k[0]...),
 					append([]byte{}, k[1]...),
-					append([]byte{}, k[2]...))
+					append([]byte{}, k[2]...),
+					getVal(m, meta) > 0)
 				setErr(m, meta, err)
 			})
 		case func(ctx context.Context, wg *watchGroup, id []byte) error:
@@ -299,7 +313,7 @@ func get[T any](ctx context.Context, key string) T {
 	return v.(T)
 }
 
-func val(m api.Module, meta *meta) uint64 {
+func getVal(m api.Module, meta *meta) uint64 {
 	return readUint64(m, meta.ptrVal)
 }
 

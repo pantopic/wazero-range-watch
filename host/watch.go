@@ -7,19 +7,25 @@ import (
 )
 
 type watch struct {
+	sync.WaitGroup
 	sync.RWMutex
 
 	group  *watchGroup
 	id     []byte
 	intv   *byteinterval.Interval[*watch]
+	key    string
 	out    chan watchMsg
 	synced bool
 }
 
-func (w *watch) send(val uint64) {
+func (w *watch) send(val uint64) bool {
 	w.RLock()
 	defer w.RUnlock()
+	if w.synced {
+		return false
+	}
 	w.out <- watchMsg{w.id, val}
+	return true
 }
 
 func (w *watch) sync() {
@@ -28,10 +34,18 @@ func (w *watch) sync() {
 	if w.synced {
 		return
 	}
-	out := w.out
-	w.out = w.group.out
-	close(out)
+	w.group.Lock()
+	defer w.group.Unlock()
+	delete(w.group.unsynced, w.key)
+	close(w.out)
+	w.Wait()
 	w.synced = true
+}
+
+func (w *watch) isSynced() bool {
+	w.RLock()
+	defer w.RUnlock()
+	return w.synced
 }
 
 type watchMsg struct {

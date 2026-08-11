@@ -64,11 +64,10 @@ func test_clear() {
 //export test_create
 func test_create(from, to uint32) {
 	id := watchID(from, to)
-	range_watch.Open(id,
+	range_watch.OpenStart(id,
 		[]byte(`test-`+strconv.Itoa(int(from))),
 		[]byte(`test-`+strconv.Itoa(int(to))),
 	)
-	range_watch.Start(id)
 }
 
 //export test_reserve
