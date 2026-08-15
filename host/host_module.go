@@ -73,12 +73,12 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 		"__range_watch_clear": func(ctx context.Context, list *watchList) {
 			list.clear()
 		},
-		"__range_watch_reserve": func(ctx context.Context, group *watchGroup, id []byte) (err error) {
-			_, err = group.reserve(ctx, id)
+		"__range_watch_reserve": func(group *watchGroup, id []byte) (err error) {
+			_, err = group.reserve(id)
 			return
 		},
-		"__range_watch_open": func(ctx context.Context, group *watchGroup, id, from, to []byte, synced bool) (err error) {
-			_, err = group.open(ctx, id, from, to, synced)
+		"__range_watch_open": func(group *watchGroup, id, from, to []byte, synced bool) (err error) {
+			_, err = group.open(id, from, to, synced)
 			if err != nil {
 				return
 			}
@@ -96,13 +96,14 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			var val uint64 = 0
 			var batches = make(chan []byte)
 			var bufCap uint32
-			wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-				bufCap = readUint32(mod, meta.ptrBufCap)
-			})
-			var bufPool = sync.Pool{
-				New: func() any { return make([]byte, 0, bufCap) },
-			}
+			var bufPool = sync.Pool{}
 			watch.Go(func() {
+				wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+					bufCap = readUint32(mod, meta.ptrBufCap)
+				})
+				bufPool = sync.Pool{
+					New: func() any { return make([]byte, 0, bufCap) },
+				}
 				var closed bool
 				for {
 					val = 0
@@ -115,7 +116,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 						}
 					drain:
 						for {
-							if len(buf)+len(msg.id)+8 >= cap(buf) {
+							if len(buf)+len(msg.w.id)+8 >= cap(buf) {
 								batches <- buf
 								buf = bufPool.Get().([]byte)[:0]
 								val = 0
@@ -127,8 +128,8 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 								}
 								buf = binary.BigEndian.AppendUint64(buf, val)
 							}
-							buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.id)))
-							buf = append(buf, msg.id...)
+							buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.w.id)))
+							buf = append(buf, msg.w.id...)
 							select {
 							case msg = <-watch.out:
 							default:
@@ -191,14 +192,14 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				meta := get[*meta](ctx, ctxKeyMeta)
 				fn(ctx, getWatchList(ctx), getVal(m, meta), keys(m, meta))
 			})
-		case func(ctx context.Context, group *watchGroup, id, from, to []byte, synced bool) error:
+		case func(group *watchGroup, id, from, to []byte, synced bool) error:
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
 				k := keys(m, meta)
 				if len(k) != 3 {
 					panic(`expected 3 args`)
 				}
-				fn(ctx, getWatchGroup(ctx),
+				fn(getWatchGroup(ctx),
 					append([]byte{}, k[0]...),
 					append([]byte{}, k[1]...),
 					append([]byte{}, k[2]...),
@@ -209,6 +210,12 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
 				meta := get[*meta](ctx, ctxKeyMeta)
 				err := fn(ctx, getWatchGroup(ctx), getData(m, meta))
+				setErr(m, meta, err)
+			})
+		case func(wg *watchGroup, id []byte) error:
+			register(name, func(ctx context.Context, m api.Module, stack []uint64) {
+				meta := get[*meta](ctx, ctxKeyMeta)
+				err := fn(getWatchGroup(ctx), getData(m, meta))
 				setErr(m, meta, err)
 			})
 		case func(ctx context.Context, wg *watchGroup):
@@ -256,7 +263,7 @@ func (h *hostModule) ContextCopy(dst, src context.Context) context.Context {
 		if v := src.Value(ctxKeyGroup); v != nil && v.(*watchGroup).active {
 			dst = context.WithValue(dst, ctxKeyGroup, v.(*watchGroup))
 		} else {
-			dst = context.WithValue(dst, ctxKeyGroup, newWatchGroup(dst))
+			dst = context.WithValue(dst, ctxKeyGroup, newWatchGroup())
 		}
 	} else {
 		dst = context.WithValue(dst, ctxKeyWatchList, newWatchList(dst))
