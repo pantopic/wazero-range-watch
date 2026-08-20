@@ -1,13 +1,20 @@
 const std = @import("std");
 const abi = @import("abi.zig");
 
+pub const Notice = abi.Notice;
+
 pub const Error = error{
     WatchReceiveAlreadyRegistered,
     Host,
 };
 
+/// Registers an allocator
+pub fn init(allocator: std.mem.Allocator) void {
+    abi._allocator = allocator;
+}
+
 /// Registers a callback to receive watch notices
-pub fn receive(f: *const fn (id: []const u8, vals: []u64) void) Error!void {
+pub fn receive(f: *const fn (notices: []abi.Notice) void) Error!void {
     if (abi._recv != null) return Error.WatchReceiveAlreadyRegistered;
     abi._recv = f;
 }

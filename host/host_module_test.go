@@ -29,7 +29,7 @@ func TestModule(t *testing.T) {
 		wasm []byte
 	}{
 		{`go`, testwasmGo},
-		// {`zig`, testwasmZig},
+		{`zig`, testwasmZig},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testModule(t, tc.wasm)

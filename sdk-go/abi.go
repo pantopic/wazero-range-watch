@@ -44,20 +44,20 @@ var notices []Notice
 //export __range_watch_recv
 func __range_watch_recv() {
 	notices = notices[:0]
-	for i := uint32(0); i < _bufLen; {
+	var i uint32 = 2
+	count := binary.BigEndian.Uint16(_buf)
+	for range count {
 		var n Notice
 		n.Val = binary.BigEndian.Uint64(_buf[i:])
 		i += 8
-		for i < _bufLen {
-			var idLen = binary.BigEndian.Uint16(_buf[i:])
+		idCount := binary.BigEndian.Uint16(_buf[i:])
+		i += 2
+		for range idCount {
+			idLen := uint32(binary.BigEndian.Uint16(_buf[i:]))
 			i += 2
-			if idLen == 0 {
-				break
-			}
-			b := make([]byte, idLen)
-			copy(b, _buf[i:i+uint32(idLen)])
-			n.IDs = append(n.IDs, b)
-			i += uint32(idLen)
+			id := _buf[i : i+idLen]
+			i += idLen
+			n.IDs = append(n.IDs, id)
 		}
 		notices = append(notices, n)
 	}

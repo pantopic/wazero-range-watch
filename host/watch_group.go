@@ -131,15 +131,26 @@ func (wg *watchGroup) start(ctx context.Context) {
 		bufPool = sync.Pool{
 			New: func() any { return make([]byte, 0, bufCap) },
 		}
+		var buf []byte
 		var val uint64
-		for {
+		var count uint16 = 0
+		var idCount uint16 = 0
+		var idCountIdx int = 0
+		reset := func() {
+			buf = bufPool.Get().([]byte)[:0]
+			buf = binary.BigEndian.AppendUint16(buf, 0)
 			val = 0
+			count = 0
+			idCount = 0
+			idCountIdx = 0
+		}
+		for {
+			reset()
 			msgs, ok := <-wg.out
 			if !ok {
 				close(batches)
 				return
 			}
-			buf := bufPool.Get().([]byte)[:0]
 			wg.RLock()
 		drain:
 			for _, msg := range msgs {
@@ -148,20 +159,27 @@ func (wg *watchGroup) start(ctx context.Context) {
 					wg.unsynced[msg.w.key].send(msg.val) {
 					continue
 				}
-				if len(buf)+len(msg.w.id)+8 >= cap(buf) {
+				if len(buf)+len(msg.w.id)+12 >= cap(buf) || count == 0xFFFF {
+					println(`count`, count, `idCount`, idCount, `len(buf)`, len(buf), `cap(buf)`, cap(buf))
+					binary.BigEndian.PutUint16(buf, count)
+					binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
 					batches <- buf
-					buf = bufPool.Get().([]byte)[:0]
-					val = 0
+					reset()
 				}
-				if msg.val != val {
-					val = msg.val
-					if len(buf) > 0 {
-						buf = binary.BigEndian.AppendUint16(buf, 0)
+				if msg.val != val || idCount == 0xFFFF {
+					if idCountIdx > 0 {
+						binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
 					}
+					val = msg.val
 					buf = binary.BigEndian.AppendUint64(buf, val)
+					idCount = 0
+					idCountIdx = len(buf)
+					buf = binary.BigEndian.AppendUint16(buf, 0)
+					count++
 				}
 				buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.w.id)))
 				buf = append(buf, msg.w.id...)
+				idCount++
 			}
 			select {
 			case msgs = <-wg.out:
@@ -169,6 +187,8 @@ func (wg *watchGroup) start(ctx context.Context) {
 			default:
 			}
 			wg.RUnlock()
+			binary.BigEndian.PutUint16(buf, count)
+			binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
 			batches <- buf
 		}
 	})

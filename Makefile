@@ -1,4 +1,6 @@
-wasm:
+wasm: wasm-go wasm-zig
+
+wasm-go:
 	@cd test && tinygo build -buildmode=wasi-legacy -target=wasi -opt=z -gc=leaking -scheduler=none -o ../host/test.wasm module.go
 
 wasm-zig:

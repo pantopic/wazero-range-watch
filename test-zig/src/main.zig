@@ -1,18 +1,42 @@
 const std = @import("std");
 const range_watch = @import("range_watch");
 
-// Plain _start (default entry disabled in build.zig): registers the receive
-// callback and returns without proc_exit so the module instance stays open.
+var arena_state = std.heap.ArenaAllocator.init(std.heap.wasm_allocator);
+
 export fn _start() void {
+    range_watch.init(arena_state.allocator());
     range_watch.receive(recv) catch {};
 }
 
-fn recv(id: []const u8, vals: []u64) void {
+fn recv(notices: []range_watch.Notice) void {
     var tmp: [512]u8 = undefined;
-    const line = std.fmt.bufPrint(&tmp, "{s} {any}\n", .{ id, vals }) catch return;
-    const iovs = [_]std.os.wasi.ciovec_t{.{ .base = line.ptr, .len = line.len }};
-    var nwritten: usize = undefined;
-    _ = std.os.wasi.fd_write(1, &iovs, iovs.len, &nwritten);
+    for (notices) |notice| {
+        var offset: usize = 0;
+        var written = std.fmt.bufPrint(tmp[offset..], "{d} ", .{notice.val}) catch return;
+        offset += written.len;
+        for (notice.ids, 0..) |id, index| {
+            if (index > 0) {
+                tmp[offset] = ' ';
+                offset += 1;
+            }
+            written = std.fmt.bufPrint(tmp[offset..], "{s}", .{id}) catch return;
+            offset += written.len;
+        }
+        tmp[offset] = '\n';
+        offset += 1;
+        const line = tmp[0..offset];
+        const iovs = [_]std.os.wasi.ciovec_t{.{ .base = line.ptr, .len = line.len }};
+        var nwritten: usize = undefined;
+        _ = std.os.wasi.fd_write(1, &iovs, iovs.len, &nwritten);
+    }
+}
+
+export fn test_group_start() void {
+    range_watch.groupStart();
+}
+
+export fn test_group_stop() void {
+    range_watch.groupStop();
 }
 
 export fn test_emit(val: u32) void {

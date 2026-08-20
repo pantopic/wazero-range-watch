@@ -93,10 +93,22 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				return
 			}
 			meta := get[*meta](ctx, ctxKeyMeta)
+			var buf []byte
 			var val uint64 = 0
+			var count uint16 = 0
+			var idCount uint16 = 0
+			var idCountIdx int = 0
 			var batches = make(chan []byte)
 			var bufCap uint32
 			var bufPool = sync.Pool{}
+			reset := func() {
+				buf = bufPool.Get().([]byte)[:0]
+				buf = binary.BigEndian.AppendUint16(buf, 0)
+				val = 0
+				count = 0
+				idCount = 0
+				idCountIdx = 0
+			}
 			watch.Go(func() {
 				wazeropool.FromContext(ctx).Run(func(mod api.Module) {
 					bufCap = readUint32(mod, meta.ptrBufCap)
@@ -106,8 +118,7 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 				}
 				var closed bool
 				for {
-					val = 0
-					buf := bufPool.Get().([]byte)[:0]
+					reset()
 					select {
 					case msg, ok := <-watch.out:
 						if !ok {
@@ -116,23 +127,31 @@ func (h *hostModule) Register(ctx context.Context, r wazero.Runtime) (err error)
 						}
 					drain:
 						for {
-							if len(buf)+len(msg.w.id)+8 >= cap(buf) {
+							if len(buf)+len(msg.w.id)+12 >= cap(buf) || count == 0xFFFF {
+								binary.BigEndian.PutUint16(buf, count)
+								binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
 								batches <- buf
-								buf = bufPool.Get().([]byte)[:0]
-								val = 0
+								reset()
 							}
-							if msg.val != val {
-								val = msg.val
-								if len(buf) > 0 {
-									buf = binary.BigEndian.AppendUint16(buf, 0)
+							if msg.val != val || idCount == 0xFFFF {
+								if idCountIdx > 0 {
+									binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
 								}
+								val = msg.val
 								buf = binary.BigEndian.AppendUint64(buf, val)
+								idCountIdx = len(buf)
+								buf = binary.BigEndian.AppendUint16(buf, 0)
+								idCount = 0
+								count++
 							}
 							buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.w.id)))
 							buf = append(buf, msg.w.id...)
+							idCount++
 							select {
 							case msg = <-watch.out:
 							default:
+								binary.BigEndian.PutUint16(buf, count)
+								binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
 								batches <- buf
 								break drain
 							}
