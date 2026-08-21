@@ -56,6 +56,18 @@ pub fn reserve(id: []const u8) Error!void {
 
 /// Starts receiving values into a buffer
 pub fn open(id: []const u8, from: []const u8, to: []const u8) Error!void {
+    abi._val = 0;
+    abi._buf_len = 0;
+    _ = abi.appendKey(id);
+    _ = abi.appendKey(from);
+    _ = abi.appendKey(to);
+    abi.__range_watch_open();
+    return abi.getErr();
+}
+
+/// Starts receiving and processing values in one step
+pub fn openstart(id: []const u8, from: []const u8, to: []const u8) Error!void {
+    abi._val = 1;
     abi._buf_len = 0;
     _ = abi.appendKey(id);
     _ = abi.appendKey(from);

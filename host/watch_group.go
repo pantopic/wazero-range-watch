@@ -160,7 +160,6 @@ func (wg *watchGroup) start(ctx context.Context) {
 					continue
 				}
 				if len(buf)+len(msg.w.id)+12 >= cap(buf) || count == 0xFFFF {
-					println(`count`, count, `idCount`, idCount, `len(buf)`, len(buf), `cap(buf)`, cap(buf))
 					binary.BigEndian.PutUint16(buf, count)
 					binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
 					batches <- buf
