@@ -12,12 +12,24 @@ func init() {
 
 func main() {}
 
-func recv(id []byte, vals []uint64) {
-	s := string(id)
-	for _, v := range vals {
-		s += " " + strconv.FormatUint(v, 10)
+func recv(notices []range_watch.Notice) {
+	for _, notice := range notices {
+		s := strconv.Itoa(int(notice.Val))
+		for _, id := range notice.IDs {
+			s += " " + string(id)
+		}
+		println(s)
 	}
-	println(s)
+}
+
+//export test_group_start
+func test_group_start() {
+	range_watch.GroupStart()
+}
+
+//export test_group_stop
+func test_group_stop() {
+	range_watch.GroupStop()
 }
 
 //export test_emit
@@ -52,11 +64,10 @@ func test_clear() {
 //export test_create
 func test_create(from, to uint32) {
 	id := watchID(from, to)
-	range_watch.Open(id,
+	range_watch.OpenStart(id,
 		[]byte(`test-`+strconv.Itoa(int(from))),
 		[]byte(`test-`+strconv.Itoa(int(to))),
 	)
-	range_watch.Start(id)
 }
 
 //export test_reserve
@@ -99,13 +110,15 @@ func watchID(from, to uint32) []byte {
 }
 
 // Fix for lint rule `unusedfunc`
-var _ = test_emit
-var _ = test_queue
-var _ = test_flush
 var _ = test_clear
-var _ = test_reserve
 var _ = test_create
+var _ = test_emit
+var _ = test_emit_2
+var _ = test_flush
+var _ = test_group_start
+var _ = test_group_stop
 var _ = test_open
+var _ = test_queue
+var _ = test_reserve
 var _ = test_start
 var _ = test_stop
-var _ = test_emit_2

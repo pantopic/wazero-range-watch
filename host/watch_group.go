@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/tetratelabs/wazero/api"
 
@@ -18,29 +16,26 @@ type watchGroup struct {
 	sync.WaitGroup
 	sync.RWMutex
 
-	ctx     context.Context
-	id      uint64
-	list    *watchList
-	out     chan watchMsg
-	active  bool
-	watches map[string]*watch
+	id       uint64
+	list     *watchList
+	out      chan []watchMsg
+	active   bool
+	watches  map[string]*watch
+	unsynced map[string]*watch
 }
 
-func newWatchGroup(ctx context.Context) (wg *watchGroup) {
-	list := getWatchList(ctx)
-	wg = &watchGroup{
-		list: list,
-	}
+func newWatchGroup() (wg *watchGroup) {
+	wg = &watchGroup{}
 	return
 }
 
-func (wg *watchGroup) reserve(ctx context.Context, id []byte) (w *watch, err error) {
+func (wg *watchGroup) reserve(id []byte) (w *watch, err error) {
 	wg.Lock()
 	defer wg.Unlock()
-	return wg._reserve(ctx, id)
+	return wg._reserve(id)
 }
 
-func (wg *watchGroup) _reserve(ctx context.Context, id []byte) (w *watch, err error) {
+func (wg *watchGroup) _reserve(id []byte) (w *watch, err error) {
 	var k = wg.key(id)
 	var ok bool
 	if w, ok = wg.watches[k]; ok {
@@ -49,23 +44,29 @@ func (wg *watchGroup) _reserve(ctx context.Context, id []byte) (w *watch, err er
 	w = &watch{
 		group: wg,
 		id:    append([]byte{}, id...),
-		out:   make(chan watchMsg, 1e3),
+		key:   k,
+		out:   make(chan watchMsg, 1<<10),
 	}
 	wg.watches[k] = w
 	return
 }
 
-func (wg *watchGroup) open(ctx context.Context, id, from, to []byte) (w *watch, err error) {
+func (wg *watchGroup) open(id, from, to []byte, synced bool) (w *watch, err error) {
 	wg.Lock()
 	defer wg.Unlock()
 	if !wg.active {
 		return nil, ErrWatchGroupNotActive
 	}
-	w, err = wg._reserve(ctx, id)
+	w, err = wg._reserve(id)
 	if err == ErrWatchExists && w.intv != nil {
 		return nil, ErrWatchAlreadyOpen
 	}
 	w.intv = wg.list.tree.Insert(from, to, w)
+	if synced {
+		w.synced = true
+	} else {
+		wg.unsynced[w.key] = w
+	}
 	return
 }
 
@@ -85,6 +86,7 @@ func (wg *watchGroup) close(id []byte) (err error) {
 	}
 	w.intv.Remove()
 	delete(wg.watches, k)
+	delete(wg.unsynced, k)
 	return
 }
 
@@ -98,6 +100,7 @@ func (wg *watchGroup) closeAll() (err error) {
 	wg.list.Lock()
 	delete(wg.list.groups, wg.id)
 	wg.list.Unlock()
+	close(wg.out)
 	return
 }
 
@@ -108,84 +111,102 @@ func (wg *watchGroup) key(id []byte) string {
 func (wg *watchGroup) start(ctx context.Context) {
 	wg.Lock()
 	defer wg.Unlock()
+	wg.list = getWatchList(ctx)
 	wg.id = wg.list.groupID.Add(1)
-	wg.out = make(chan watchMsg, 1e3)
+	wg.out = make(chan []watchMsg, 10<<10)
 	wg.watches = make(map[string]*watch)
+	wg.unsynced = make(map[string]*watch)
 	wg.active = true
-	var i int = 0
-	var limit int = 1e4
-	var batches = make(chan map[string][]watchMsg)
-	meta := get[*meta](ctx, ctxKeyMeta)
 	wg.list.Lock()
 	wg.list.groups[wg.id] = wg
 	wg.list.Unlock()
+	var meta = get[*meta](ctx, ctxKeyMeta)
+	var bufCap uint32
+	var bufPool = sync.Pool{}
+	var batches = make(chan []byte)
 	wg.Go(func() {
-		var valsCap uint32
 		wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-			valsCap = readUint32(mod, meta.ptrValsCap)
+			bufCap = readUint32(mod, meta.ptrBufCap)
 		})
-		t := time.NewTicker(50 * time.Millisecond)
-		defer t.Stop()
+		bufPool = sync.Pool{
+			New: func() any { return make([]byte, 0, bufCap) },
+		}
+		var buf []byte
+		var val uint64
+		var count uint16 = 0
+		var idCount uint16 = 0
+		var idCountIdx int = 0
+		reset := func() {
+			buf = bufPool.Get().([]byte)[:0]
+			buf = binary.BigEndian.AppendUint16(buf, 0)
+			val = 0
+			count = 0
+			idCount = 0
+			idCountIdx = 0
+		}
 		for {
-			i = 0
-			m := make(map[string][]watchMsg)
-			select {
-			case msg := <-wg.out:
-				t.Reset(50 * time.Millisecond)
-			drain:
-				for {
-					i++
-					k := fmt.Sprintf(`%x`, msg.id)
-					if _, ok := m[k]; !ok {
-						m[k] = append([]watchMsg{}, msg)
-					} else {
-						m[k] = append(m[k], msg)
-					}
-					if len(m[k]) >= int(valsCap) {
-						batches <- m
-						break drain
-					}
-					select {
-					case msg = <-wg.out:
-					case <-t.C:
-						batches <- m
-						break drain
-					}
-					if i >= limit {
-						batches <- m
-						break drain
-					}
-				}
-			case <-ctx.Done():
+			reset()
+			msgs, ok := <-wg.out
+			if !ok {
+				close(batches)
 				return
 			}
+			wg.RLock()
+		drain:
+			for _, msg := range msgs {
+				if len(wg.unsynced) > 0 &&
+					wg.unsynced[msg.w.key] != nil &&
+					wg.unsynced[msg.w.key].send(msg.val) {
+					continue
+				}
+				if len(buf)+len(msg.w.id)+12 >= cap(buf) || count == 0xFFFF {
+					binary.BigEndian.PutUint16(buf, count)
+					binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
+					batches <- buf
+					reset()
+				}
+				if msg.val != val || idCount == 0xFFFF {
+					if idCountIdx > 0 {
+						binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
+					}
+					val = msg.val
+					buf = binary.BigEndian.AppendUint64(buf, val)
+					idCount = 0
+					idCountIdx = len(buf)
+					buf = binary.BigEndian.AppendUint16(buf, 0)
+					count++
+				}
+				buf = binary.BigEndian.AppendUint16(buf, uint16(len(msg.w.id)))
+				buf = append(buf, msg.w.id...)
+				idCount++
+			}
+			select {
+			case msgs = <-wg.out:
+				goto drain
+			default:
+			}
+			wg.RUnlock()
+			binary.BigEndian.PutUint16(buf, count)
+			binary.BigEndian.PutUint16(buf[idCountIdx:], idCount)
+			batches <- buf
 		}
 	})
 	wg.Go(func() {
-		for m := range batches {
-			var g sync.WaitGroup
-			for _, msgs := range m {
-				g.Go(func() {
-					wazeropool.FromContext(ctx).Run(func(mod api.Module) {
-						setData(mod, meta, msgs[0].id)
-						for i, m := range msgs {
-							setVals(mod, meta, uint32(i), m.val)
-						}
-						setValsLen(mod, meta, uint32(len(msgs)))
-						setErr(mod, meta, nil)
-						if _, err := mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
-							slog.Error("Error __range_watch_recv A", "watchID", msgs[0].id, "err", err.Error())
-							return
-						}
-						if err := getErr(mod, meta); err != nil {
-							slog.Error("Error __range_watch_recv B", "watchID", msgs[0].id, "err", err.Error())
-							wg.close(msgs[0].id)
-							return
-						}
-					})
-				})
-			}
-			g.Wait()
+		for b := range batches {
+			wazeropool.FromContext(ctx).Run(func(mod api.Module) {
+				setData(mod, meta, b)
+				setErr(mod, meta, nil)
+				if _, err := mod.ExportedFunction("__range_watch_recv").Call(ctx); err != nil {
+					slog.Error("Error __range_watch_recv A", "err", err.Error())
+					return
+				}
+				if err := getErr(mod, meta); err != nil {
+					slog.Error("Error __range_watch_recv B", "err", err.Error())
+					wg.closeAll()
+					return
+				}
+			})
+			bufPool.Put(b)
 		}
 	})
 }

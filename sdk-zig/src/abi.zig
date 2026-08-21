@@ -7,7 +7,6 @@ const sdk = @import("sdk.zig");
 
 const _buf_cap_default: u32 = 16 << 10; // 16KB
 const _err_cap_default: u32 = 1 << 10; // 1KB
-const _vals_cap_default: u32 = 1 << 10; // 1,024
 
 pub var _buf_cap: u32 = _buf_cap_default;
 pub var _buf_len: u32 = 0;
@@ -16,12 +15,10 @@ pub var _err_cap: u32 = _err_cap_default;
 pub var _err_len: u32 = 0;
 pub var _err: [_err_cap_default]u8 = undefined;
 pub var _val: u64 = 0;
-pub var _vals_cap: u32 = _vals_cap_default;
-pub var _vals_len: u32 = 0;
-pub var _vals: [_vals_cap_default]u64 = undefined;
-pub var _meta: [10]u32 = undefined;
+pub var _meta: [7]u32 = undefined;
 
-pub var _recv: ?*const fn (id: []const u8, vals: []u64) void = null;
+pub var _recv: ?*const fn (notices: []Notice) void = null;
+pub var _allocator: std.mem.Allocator = undefined;
 
 export fn __range_watch() u32 {
     _meta = .{
@@ -32,15 +29,34 @@ export fn __range_watch() u32 {
         @intFromPtr(&_err_cap),
         @intFromPtr(&_err_len),
         @intFromPtr(&_val),
-        @intFromPtr(&_vals),
-        @intFromPtr(&_vals_cap),
-        @intFromPtr(&_vals_len),
     };
     return @intFromPtr(&_meta);
 }
 
+pub const Notice = struct {
+    val: u64,
+    ids: [][]const u8,
+};
+
 export fn __range_watch_recv() void {
-    if (_recv) |f| f(_buf[0.._buf_len], _vals[0.._vals_len]);
+    var i: u32 = 0;
+    const count = std.mem.readInt(u16, @ptrCast(&_buf[i]), .big);
+    const notices = _allocator.alloc(Notice, count) catch unreachable;
+    i += 2;
+    for (notices) |*n| {
+        n.* = Notice{
+            .val = std.mem.readInt(u64, @ptrCast(&_buf[i]), .big),
+            .ids = _allocator.alloc([]const u8, std.mem.readInt(u16, @ptrCast(&_buf[i + 8]), .big)) catch unreachable,
+        };
+        i += 10;
+        for (n.ids) |*id| {
+            const len = std.mem.readInt(u16, @ptrCast(&_buf[i]), .big);
+            i += 2;
+            id.* = _buf[i .. i + len];
+            i += len;
+        }
+    }
+    if (_recv) |f| f(notices);
 }
 
 pub extern "pantopic/wazero-range-watch" fn __range_watch_queue() void;

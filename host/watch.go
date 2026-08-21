@@ -1,25 +1,37 @@
 package wazero_range_watch
 
 import (
+	"log/slog"
 	"sync"
 
 	"github.com/logbn/byteinterval"
 )
 
 type watch struct {
+	sync.WaitGroup
 	sync.RWMutex
 
 	group  *watchGroup
 	id     []byte
 	intv   *byteinterval.Interval[*watch]
+	key    string
 	out    chan watchMsg
 	synced bool
 }
 
-func (w *watch) send(val uint64) {
+func (w *watch) send(val uint64) bool {
 	w.RLock()
 	defer w.RUnlock()
-	w.out <- watchMsg{w.id, val}
+	if w.synced {
+		return false
+	}
+	select {
+	case w.out <- watchMsg{w, val}:
+	default:
+		slog.Error(`watch full`, `id`, w.key)
+		w.group.close(w.id)
+	}
+	return true
 }
 
 func (w *watch) sync() {
@@ -28,13 +40,16 @@ func (w *watch) sync() {
 	if w.synced {
 		return
 	}
-	out := w.out
-	w.out = w.group.out
-	close(out)
+	w.group.Lock()
+	defer w.group.Unlock()
+	delete(w.group.unsynced, w.key)
+	close(w.out)
+	w.Wait()
 	w.synced = true
 }
 
-type watchMsg struct {
-	id  []byte
-	val uint64
+func (w *watch) isSynced() bool {
+	w.RLock()
+	defer w.RUnlock()
+	return w.synced
 }
