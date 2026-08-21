@@ -7,7 +7,6 @@ const sdk = @import("sdk.zig");
 
 const _buf_cap_default: u32 = 16 << 10; // 16KB
 const _err_cap_default: u32 = 1 << 10; // 1KB
-const _vals_cap_default: u32 = 1 << 10; // 1,024
 
 pub var _buf_cap: u32 = _buf_cap_default;
 pub var _buf_len: u32 = 0;
